@@ -42,6 +42,7 @@ canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .shelf-jewel::after { content: ""; position: absolute; inset: 19%; background: var(--color); clip-path: inherit; }
 .flying-jewel { position: fixed; pointer-events: none; z-index: 10; }
 .add-shelf { display: block; min-height: 44px; width: 100%; font-size: 12px; color: #3c614f; }
+.shelf-scroll-note { margin: -4px 0 8px; text-align: center; font-size: 10px; color: #748478; }
 dialog { border: 1px solid #e3e6da; background: #f8f7f2; color: #294b45; width: min(370px,calc(100% - 36px)); border-radius: 24px; padding: 32px; box-shadow: 0 20px 70px #193a4430; }
 dialog::backdrop { background: #233e3b66; backdrop-filter: blur(5px); }
 .close { position: absolute; right: 10px; top: 10px; width: 44px; height: 44px; font-size: 24px; }
