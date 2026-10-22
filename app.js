@@ -25,7 +25,7 @@ let arrivals = new Set();
 function message(text) { $('instruction').textContent = text; }
 function save() {
   try { localStorage.setItem(key, JSON.stringify({ board: state.board, shelf: state.shelf, moves: state.moves, selectedColor: selection?.color ?? null })); }
-  catch { $('saveStatus').textContent = 'Saving unavailable in this browser'; }
+  catch { message('Saving unavailable in this browser'); }
 }
 function syncShelfButtons() {
   while(shelfButtons.length > state.shelf.length) shelfButtons.pop().remove();
@@ -40,15 +40,10 @@ $('shelf').onclick = e => {
 };
 function update() {
   syncShelfButtons();
-  const correct = correctCount(art, state), percent = Math.floor(correct / total * 100);
-  $('percent').textContent = `${percent}%`;
-  $('progress').style.width = `${percent}%`;
-  $('progressText').textContent = `${correct.toLocaleString()} of ${total.toLocaleString()} jewels at home`;
+  const correct = correctCount(art, state);
   const free = state.shelf.filter(c => c < 0).length;
-  $('shelfCount').textContent = `${free} of ${state.shelf.length} spaces free`;
   $('shelf').classList.toggle('ready', selection?.kind === 'board' && free > 0);
   $('shelf').classList.toggle('hinted', hintTarget?.kind === 'shelf');
-  $('shelfNote').textContent = selection ? selection.cells.length ? `${selection.cells.length} ${selection.cells.length === 1 ? 'jewel' : 'jewels'} selected · color stays selected` : 'All jewels of this color are home' : free ? 'Temporary storage. Make space, then match colors.' : 'Shelf full. Place a group or undo a move.';
   shelfButtons.forEach((b, i) => {
     const c = state.shelf[i];
     b.classList.toggle('occupied', c >= 0);
@@ -58,7 +53,6 @@ function update() {
     b.setAttribute('aria-label', c >= 0 ? `Shelf slot ${i + 1}, jewel ${art.colors[c]}. Select this color group.` : `Shelf slot ${i + 1}, empty. Store selected jewels.`);
     b.setAttribute('aria-pressed', String(selection?.kind === 'shelf' && selection.color === c));
   });
-  $('clearSelection').hidden = !selection;
   $('addShelf').disabled = busy || state.shelf.length >= MAX_SHELF_SIZE;
   $('undo').disabled = !history.length || busy;
   $('hint').disabled = correct === total || busy;
@@ -281,20 +275,11 @@ $('hint').onclick = () => {
 function show(content) { $('modalContent').innerHTML=content; if (!$('modal').open) $('modal').showModal(); }
 $('close').onclick = () => $('modal').close();
 $('modal').onclick = e => { if(e.target===$('modal')){const r=$('modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('modal').close();} };
-$('preview').onclick = () => show('<p class="eyebrow">EVERY COLOR HAS A HOME</p><h2>A little love</h2><img src="assets/art.png" alt="Original pixel artwork"><p>Move the jewels until each one matches the colored space underneath it.</p>');
-$('clearSelection').onclick=()=>{selection=null;hintTarget=null;message('Choose a jewel color.');update();};
 $('addShelf').onclick=()=>{
   if(busy||state.shelf.length>=MAX_SHELF_SIZE)return;
   state=expandShelf(state);
   // Adding room is permanent for this puzzle, including when undoing a move.
   history=history.map(p=>({...p,shelf:[...p.shelf,...Array(state.shelf.length-p.shelf.length).fill(-1)]}));
   save();update();message('Eight more spaces. Make yourself comfortable.');
-};
-$('help').onclick = () => show('<p class="eyebrow">MAKE SPACE. MATCH COLORS.</p><h2>A little jewel sorting.</h2><p><b>1. Pick up a group.</b> Tap a misplaced jewel to select its connected color group. Diagonals connect too. Jewels already on their matching color are locked and never join a selection.</p><p><b>2. Make some room.</b> Tap an empty shelf slot to store the group. Tap an occupied shelf slot to select those jewels. It starts with 24 spaces; Add shelf space adds eight more. Remaining jewels slide forward as spaces are vacated.</p><p><b>3. Put them home.</b> The square base shows the target color. Loose jewels stand above recessed sockets; selected jewels lift up. Matching jewels sit flush in the board and stay locked. Select jewels on the board or shelf, then tap an empty matching socket. Jewels flow into connected matching spaces.</p><p>Your color stays selected after each move. Tap its selected group again or Clear selection to deselect; tap another jewel to change color. Repeat until every jewel matches its space and the shelf is empty. Pinch to zoom, drag to pan. Hint suggests a move; Undo takes one back.</p>');
-$('restart').onclick = () => {
-  if(busy)return;
-  show('<h2>Mix them up again?</h2><p>This resets the board and clears your saved sorting progress.</p><button class="primary" id="confirmRestart">Restart puzzle</button><button class="secondary" id="cancelRestart">Keep playing</button>');
-  $('cancelRestart').onclick=()=>$('modal').close();
-  $('confirmRestart').onclick=()=>{state=createPuzzle(art);history=[];selection=null;hintTarget=null;zoom=2.5;ox=oy=0;save();update();message('Tap a jewel group, then the shelf.');$('modal').close();};
 };
 update();
