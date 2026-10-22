@@ -20,13 +20,8 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid #c47b46; outline
 .board-wrap { width: 100%; }
 #viewport { width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: 3px; background: #f9f9f4; touch-action: none; cursor: pointer; }
 canvas { display: block; width: 100%; height: 100%; touch-action: none; }
-.tools { display: flex; align-items: center; justify-content: space-between; height: 44px; gap: 8px; }
-.tools > button { min-width: 58px; min-height: 44px; font-size: 12px; }
-.board-controls { display: flex; align-items: center; }
-.board-controls button { width: 44px; height: 44px; font-size: 20px; }
-#fit { font-size: 11px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
-.tray { padding: 0 4px; }
+.tray { padding: 8px 4px 0; }
 #shelf {
   display: grid; grid-template-columns: repeat(8, minmax(0, 1fr));
   grid-auto-rows: 34px; gap: 2px; padding: 7px 4px 4px;
@@ -35,7 +30,6 @@ canvas { display: block; width: 100%; height: 100%; touch-action: none; }
   background: #f5edda; border: 1px solid #e8ddc3; border-radius: 10px;
   box-shadow: 0 2px 0 #ddcfb1;
 }
-#shelf.hinted { box-shadow: 0 2px 0 #ddcfb1, 0 0 0 2px #d9bd78; }
 .shelf-slot { display: grid; place-items: center; padding: 0; min-width: 0; min-height: 34px; border-radius: 5px; position: relative; }
 .socket { width: 24px; height: 24px; border-radius: 28%; background: #e2d2b6; box-shadow: inset 0 3px 3px #876b3833, inset 0 -2px 1px #fff7e0; }
 .shelf-jewel, .flying-jewel {
@@ -59,8 +53,7 @@ dialog img { display: block; width: 100%; image-rendering: pixelated; border-rad
 @media (min-width: 650px) { .app { padding-top: 12px; } }
 @media (orientation: landscape) and (max-height: 600px) {
   .app { max-width: none; display: grid; grid-template-columns: minmax(0,1fr) minmax(160px,240px); align-items: center; gap: 8px; }
-  .board-wrap { grid-row: 1 / 3; width: min(100%,calc(100svh - 16px)); justify-self: center; }
-  .tools { align-self: end; }
-  .tray { align-self: start; }
+  .board-wrap { width: min(100%,calc(100svh - 16px)); justify-self: center; }
+  .tray { align-self: center; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }

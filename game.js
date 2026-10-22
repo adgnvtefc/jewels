@@ -61,7 +61,7 @@ export function transfer(art, state, selection, destination, index = 0) {
   let targets;
   if (destination === 'shelf') {
     targets = state.shelf.flatMap((c, i) => c < 0 ? [i] : []);
-    if (!targets.length) return { error: 'Shelf full. Place a stored group, or undo a move.' };
+    if (!targets.length) return { error: 'Place a stored group or add shelf space.' };
   } else {
     if (!Number.isInteger(index) || index < 0 || index >= art.pixels.length || state.board[index] !== -1) return { error: 'Choose an empty space.' };
     if (art.pixels[index] !== source.color) return { error: 'Match the jewel color to the empty space.' };

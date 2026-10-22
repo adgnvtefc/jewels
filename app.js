@@ -1,4 +1,4 @@
-import { createPuzzle, select, transfer, correctCount, restore, findHint, shelfAction, continueSelection, expandShelf, MAX_SHELF_SIZE } from './game.js';
+import { createPuzzle, select, transfer, correctCount, restore, shelfAction, continueSelection, expandShelf, MAX_SHELF_SIZE } from './game.js';
 const $ = id => document.getElementById(id);
 let art;
 try {
@@ -12,8 +12,8 @@ try { saved = JSON.parse(localStorage.getItem(key)); } catch {}
 let state = restore(art, saved) || createPuzzle(art);
 let selection = Number.isInteger(saved?.selectedColor) && saved.selectedColor >= 0 && saved.selectedColor < art.colors.length
   ? continueSelection(art,state,{kind:'color',color:saved.selectedColor,cells:[]}) : null;
-let history = [], busy = false, zoom = 2.5, ox = 0, oy = 0, size = 0;
-let cursor = 0, keyboard = false, hintTarget = null;
+let busy = false, zoom = 1, ox = 0, oy = 0, size = 0;
+let cursor = 0, keyboard = false;
 const pointers = new Map();
 let gesture = null, startPoint = null, moved = false;
 const canvas = $('board'), ctx = canvas.getContext('2d');
@@ -40,10 +40,8 @@ $('shelf').onclick = e => {
 };
 function update() {
   syncShelfButtons();
-  const correct = correctCount(art, state);
   const free = state.shelf.filter(c => c < 0).length;
   $('shelf').classList.toggle('ready', selection?.kind === 'board' && free > 0);
-  $('shelf').classList.toggle('hinted', hintTarget?.kind === 'shelf');
   shelfButtons.forEach((b, i) => {
     const c = state.shelf[i];
     b.classList.toggle('occupied', c >= 0);
@@ -54,8 +52,6 @@ function update() {
     b.setAttribute('aria-pressed', String(selection?.kind === 'shelf' && selection.color === c));
   });
   $('addShelf').disabled = busy || state.shelf.length >= MAX_SHELF_SIZE;
-  $('undo').disabled = !history.length || busy;
-  $('hint').disabled = correct === total || busy;
   save(); draw();
 }
 // Visual states follow the reference: recessed socket, raised loose jewel,
@@ -97,7 +93,7 @@ function socket(x,y,cell,color,highlight=false) {
   octagon(x0,y0,w);ctx.strokeStyle=highlight?'#ffffffd9':'#00000012';ctx.lineWidth=highlight?Math.max(1,cell*.065):Math.max(.5,cell*.02);ctx.stroke();
 }
 function outlineCell(x,y,cell) {
-  // A restrained focus ring is reserved for the keyboard and explicit hints.
+  // A restrained focus ring is reserved for keyboard navigation.
   ctx.strokeStyle='#fff';ctx.lineWidth=Math.max(1,cell*.045);ctx.setLineDash([cell*.12,cell*.08]);
   octagon(x+cell*.08,y+cell*.08,cell*.84);ctx.stroke();ctx.setLineDash([]);
 }
@@ -123,7 +119,7 @@ function draw() {
   // Raised jewels draw above sockets, including neighbors when lifted.
   loose.filter(g=>!picked.has(g.i)).forEach(g=>jewel(g.x,g.y,cell,g.color));
   loose.filter(g=>picked.has(g.i)).forEach(g=>jewel(g.x,g.y,cell,g.color,true));
-  const focus=hintTarget?.kind==='board'?hintTarget.index:keyboard?cursor:-1;
+  const focus=keyboard?cursor:-1;
   if(focus>=0)outlineCell(focus%art.width*cell,Math.floor(focus/art.width)*cell,cell);
   ctx.restore();
 }
@@ -139,9 +135,6 @@ function zoomTo(value, x = size / 2, y = size / 2) {
   const next = Math.max(1, Math.min(5, value)); ox = x - (x - ox) * next / zoom; oy = y - (y - oy) * next / zoom;
   zoom = next; constrain(); draw();
 }
-$('zoomIn').onclick = () => zoomTo(zoom * 1.5);
-$('zoomOut').onclick = () => zoomTo(zoom / 1.5);
-$('fit').onclick = () => { zoom = 1; ox = oy = 0; draw(); };
 function selectGroup(kind, i) {
   const next = select(art, state, kind, i);
   if (!next) return;
@@ -151,16 +144,12 @@ function selectGroup(kind, i) {
     selection = next;
     message(kind === 'shelf' ? 'Tap matching empty spaces on the board.' : 'Tap the shelf, or matching empty spaces.');
   }
-  hintTarget = null; update();
+  update();
   if (selection?.kind === 'shelf') {
     const target=art.pixels.findIndex((c,n)=>c===selection.color&&state.board[n]===-1);
     if(target<0) message('No empty spaces for this color yet. Free a matching space first.');
-    else { focusCell(target); message('Shelf jewels selected. Tap a matching empty socket.'); }
+    else message('Shelf jewels selected. Tap a matching empty socket.');
   }
-}
-function focusCell(i) {
-  cursor=i; zoom=Math.max(zoom,2.5); const cell=size/art.width*zoom;
-  ox=size/2-(i%art.width+.5)*cell;oy=size/2-(Math.floor(i/art.width)+.5)*cell;constrain();draw();
 }
 function tapBoard(i) {
   if (busy || i < 0 || art.pixels[i] < 0) return;
@@ -181,7 +170,9 @@ function tapShelf(i) {
 }
 function screenPoint(location) {
   if (location.kind === 'shelf') {
-    const r = shelfButtons[location.index].getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, size: r.width * .72 };
+    const slot = shelfButtons[location.index];
+    const r = (slot.firstElementChild || slot).getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, size: r.width };
   }
   const r = canvas.getBoundingClientRect(), cell = size / art.width * zoom;
   return { x: r.x + ox + (location.index % art.width + .5) * cell, y: r.y + oy + (Math.floor(location.index / art.width) + .5) * cell, size: cell * .72 };
@@ -205,11 +196,9 @@ async function move(kind, index) {
   if (selection?.kind === 'color') { message('This color is complete. Choose another color.'); return; }
   const result = transfer(art, state, selection, kind, index);
   if (result.error) { message(result.error); return; }
-  history.push({ board: [...state.board], shelf: [...state.shelf], moves: state.moves });
-  if (history.length > 100) history.shift();
   busy = true; const motion=[...result.transfers,...result.shelfShifts];
   arrivals = new Set(motion.map(t=>`${t.to.kind}:${t.to.index}`));
-  state = result.state; selection = continueSelection(art,state,selection); hintTarget = null; save(); update();
+  state = result.state; selection = continueSelection(art,state,selection); save(); update();
   message(`${result.transfers.length} ${result.transfers.length === 1 ? 'jewel' : 'jewels'} ${kind === 'shelf' ? 'on the shelf. Now make room for their color.' : 'back where they belong.'}`);
   try { await animate(motion); } finally { arrivals.clear(); busy = false; update(); }
   if (correctCount(art, state) === total) {
@@ -258,19 +247,7 @@ canvas.onkeydown = e => {
     const cell=size/art.width*zoom; ox=size/2-(cursor%art.width+.5)*cell; oy=size/2-(Math.floor(cursor/art.width)+.5)*cell; constrain(); draw();
   }
   if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); tapBoard(cursor); }
-  if (e.key === 'Escape') { selection=null; hintTarget=null; update(); }
-};
-$('undo').onclick = () => {
-  if (busy || !history.length) return;
-  state=history.pop(); selection=continueSelection(art,state,selection); hintTarget=null; save(); update(); message('Move undone. Every jewel is back in place.');
-};
-$('hint').onclick = () => {
-  const hint = findHint(art,state);
-  if (!hint) { message('No matching spaces available. Undo a move to make room.'); return; }
-  selection=hint.selection; hintTarget={ kind:hint.destination, index:hint.index };
-  const i=hint.destination==='board'?hint.index:selection.index;
-  cursor=i; keyboard=true; zoom=2.5; const cell=size/art.width*zoom; ox=size/2-(i%art.width+.5)*cell; oy=size/2-(Math.floor(i/art.width)+.5)*cell; constrain(); update();
-  message(hint.destination==='shelf'?'Store the highlighted group on the shelf.':'Move the selected jewels to the outlined space.');
+  if (e.key === 'Escape') { selection=null; update(); }
 };
 function show(content) { $('modalContent').innerHTML=content; if (!$('modal').open) $('modal').showModal(); }
 $('close').onclick = () => $('modal').close();
@@ -278,8 +255,6 @@ $('modal').onclick = e => { if(e.target===$('modal')){const r=$('modal').getBoun
 $('addShelf').onclick=()=>{
   if(busy||state.shelf.length>=MAX_SHELF_SIZE)return;
   state=expandShelf(state);
-  // Adding room is permanent for this puzzle, including when undoing a move.
-  history=history.map(p=>({...p,shelf:[...p.shelf,...Array(state.shelf.length-p.shelf.length).fill(-1)]}));
   save();update();message('Eight more spaces. Make yourself comfortable.');
 };
 update();
