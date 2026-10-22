@@ -24,7 +24,7 @@ jobs:
       - run: npm test
       - run: |
           mkdir dist
-          cp index.html style.css app.js game.js dist/
+          cp index.html style.css app.js game.js convert.js library.js generator.js dist/
           cp -r assets dist/
           touch dist/.nojekyll
       - uses: actions/configure-pages@v5

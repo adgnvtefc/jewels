@@ -4,6 +4,13 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import * as game from './game.js';
 
+// Inline the app's own modules (everything but game.js) so they share the test context.
+const inline = file => {
+  const source = readFileSync(new URL(file, import.meta.url), 'utf8').replace(/^import .*$/gm, '');
+  const names = [...source.matchAll(/^export (?:async )?(?:function|const|class|let) (\w+)/gm)].map(m => m[1]);
+  return `const {${names}} = (() => {${source.replace(/^export /gm, '')}\nreturn {${names}};})();`;
+};
+
 // Run the real app entry point against its actual HTML IDs and a small DOM.
 // This catches missing-control crashes that pure puzzle tests cannot detect.
 async function mount() {
@@ -19,7 +26,9 @@ async function mount() {
   let elements;
   const element = () => ({
     children: [], style: { setProperty() {} }, classList: { toggle() {} },
-    setAttribute() {}, setPointerCapture() {}, addEventListener() {},
+    setAttribute() {}, setPointerCapture() {}, addEventListener() {}, focus() {}, select() {},
+    querySelector(selector) { return (this.found ??= {})[selector] ??= element(); },
+    toDataURL: () => 'data:image/png;base64,',
     append(child) { this.children.push(child); }, remove() {},
     getBoundingClientRect: () => ({ x: 0, y: 0, left: 0, top: 0, width: 400, height: 400 }),
     getContext: () => ctx, clientWidth: 400,
@@ -31,16 +40,23 @@ async function mount() {
   });
   const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
   elements = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(([, id]) => [id, element()]));
-  const source = readFileSync(new URL('./app.js', import.meta.url), 'utf8')
-    .replace(/import \{([^}]+)\} from '\.\/game.js';/, 'const {$1} = game;');
+  const source = `const {${Object.keys(game)}} = game;\n`
+    + ['./convert.js', './library.js', './generator.js'].map(inline).join('\n')
+    + readFileSync(new URL('./app.js', import.meta.url), 'utf8').replace(/^import .*$/gm, '');
+  const store = {}, sorting = 'little-jewel:sorting-v2:';
   const app = await runInNewContext(`(async () => {
     ${source}
     return { view: () => ({zoom, ox, oy}), isBusy: () => busy };
   })()`, {
     game, console, window: { devicePixelRatio: 1 },
     document: { getElementById: id => elements[id] ?? null, createElement: element, body: element() },
-    fetch: async () => ({ ok: true, json: async () => art }),
-    localStorage: { getItem: () => JSON.stringify(saved), setItem: (_, value) => { saved = JSON.parse(value); } },
+    fetch: async url => ({ ok: true, json: async () => url.endsWith('puzzles.json') ? ['test.json'] : art }),
+    localStorage: {
+      getItem: key => key.startsWith(sorting) ? JSON.stringify(saved) : store[key] ?? null,
+      setItem: (key, value) => { if (key.startsWith(sorting)) saved = JSON.parse(value); else store[key] = value; },
+      removeItem: key => { delete store[key]; },
+    },
+    location: { search: '', hostname: 'example.test' }, URLSearchParams,
     matchMedia: () => ({ matches: false }),
     ResizeObserver: class { constructor(callback) { this.callback = callback; } observe() { this.callback(); } },
   });
@@ -52,7 +68,7 @@ async function mount() {
     board.onpointerup(pointer(1, x, y, 'pointerup'));
     await settle();
   };
-  return { app, elements, board, pointer, tap, settle, saved: () => saved };
+  return { app, elements, board, pointer, tap, settle, saved: () => saved, store };
 }
 
 test('minimal UI loads and transfers board → shelf → board without camera jumps', async () => {
@@ -100,4 +116,14 @@ test('pinch zooms in and out, never moves jewels, and a cancelled gesture leaves
   t.elements.shelf.children[0].onclick();
   await t.settle();
   assert.equal(t.saved().moves, 1);
+});
+
+test('the puzzle menu lists puzzles and Create your own asks for the password', async () => {
+  const t = await mount();
+  t.elements.menu.onclick();
+  assert.equal(t.elements.modal.open, true);
+  assert.equal(t.elements.puzzleList.children.length, 1);
+  t.elements.createOwn.onclick();
+  assert.ok(t.elements.unlockForm, 'without a saved password, the password form opens');
+  assert.equal(t.store['little-jewel:current-puzzle'], '"interaction-test"');
 });

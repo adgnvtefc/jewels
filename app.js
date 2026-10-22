@@ -1,23 +1,17 @@
 import { createPuzzle, select, transfer, correctCount, restore, shelfAction, continueSelection, expandShelf, MAX_SHELF_SIZE } from './game.js';
+import { builtInPuzzles, customPuzzles, addCustom, removeCustom, currentId, rememberCurrent, progress, thumbnail, saveKey } from './library.js';
+import { unlocked, unlock, generate, pictureToArt, GeneratorError } from './generator.js';
 const $ = id => document.getElementById(id);
-let art;
-try {
-  const response = await fetch('./assets/art.json');
-  if (!response.ok) throw new Error();
-  art = await response.json();
-} catch { $('instruction').textContent = 'The artwork could not load. Please refresh.'; throw new Error('Artwork unavailable'); }
-const key = `little-jewel:sorting-v2:${art.id}`;
-let saved;
-try { saved = JSON.parse(localStorage.getItem(key)); } catch {}
-let state = restore(art, saved) || createPuzzle(art);
-let selection = Number.isInteger(saved?.selectedColor) && saved.selectedColor >= 0 && saved.selectedColor < art.colors.length
-  ? continueSelection(art,state,{kind:'color',color:saved.selectedColor,cells:[]}) : null;
+let builtIns;
+try { builtIns = await builtInPuzzles(); }
+catch { $('instruction').textContent = 'The artwork could not load. Please refresh.'; throw new Error('Artwork unavailable'); }
+const library = () => [...builtIns, ...customPuzzles()];
+let art, key, state, selection, total = 0;
 let busy = false, zoom = 1, ox = 0, oy = 0, size = 0;
 let cursor = 0, keyboard = false;
 const pointers = new Map();
 let gesture = null, startPoint = null, moved = false;
 const canvas = $('board'), ctx = canvas.getContext('2d');
-const total = art.pixels.filter(c => c >= 0).length;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const shelfButtons = [];
 let arrivals = new Set();
@@ -98,7 +92,7 @@ function outlineCell(x,y,cell) {
   octagon(x+cell*.08,y+cell*.08,cell*.84);ctx.stroke();ctx.setLineDash([]);
 }
 function draw() {
-  if(!size)return;
+  if(!size||!art)return;
   const dpr=window.devicePixelRatio||1,cell=size/art.width*zoom;
   ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,size,size);
   ctx.save();ctx.translate(ox,oy);
@@ -202,7 +196,8 @@ async function move(kind, index) {
   message(`${result.transfers.length} ${result.transfers.length === 1 ? 'jewel' : 'jewels'} ${kind === 'shelf' ? 'on the shelf. Now make room for their color.' : 'back where they belong.'}`);
   try { await animate(motion); } finally { arrivals.clear(); busy = false; update(); }
   if (correctCount(art, state) === total) {
-    show(`<p class="eyebrow">EVERY JEWEL, BACK HOME</p><h2>Made with love.</h2><p>You restored the picture in ${state.moves} moves.</p><img src="assets/art.png" alt="Your completed artwork"><button class="primary" id="keep">Enjoy your artwork</button>`);
+    const heading = art.id === 'love-garden-v1' ? 'Made with love.' : esc(art.title);
+    show(`<p class="eyebrow">EVERY JEWEL, BACK HOME</p><h2>${heading}</h2><p>You restored the picture in ${state.moves} moves.</p><img src="${thumbnail(art, 8)}" alt="Your completed artwork"><button class="primary" id="keep">Enjoy your artwork</button>`);
     $('keep').onclick = () => $('modal').close();
   }
 }
@@ -257,4 +252,101 @@ $('addShelf').onclick=()=>{
   state=expandShelf(state);
   save();update();message('Eight more spaces. Make yourself comfortable.');
 };
-update();
+const esc = text => String(text).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+
+function openPuzzle(next) {
+  art = next; key = saveKey(art.id); total = art.pixels.filter(c => c >= 0).length;
+  let saved;
+  try { saved = JSON.parse(localStorage.getItem(key)); } catch {}
+  state = restore(art, saved) || createPuzzle(art);
+  selection = Number.isInteger(saved?.selectedColor) && saved.selectedColor >= 0 && saved.selectedColor < art.colors.length
+    ? continueSelection(art,state,{kind:'color',color:saved.selectedColor,cells:[]}) : null;
+  cursor = 0; keyboard = false; zoom = 1; ox = oy = 0;
+  rememberCurrent(art.id); constrain(); update();
+  message(`${art.title}. Tap a jewel group, then the shelf.`);
+}
+
+// Puzzle menu: built-ins, then your creations, then the way to make more.
+function puzzleMenu() {
+  show(`<p class="eyebrow">CHOOSE A PICTURE</p><h2>Puzzles</h2><div class="puzzle-list" id="puzzleList"></div><button class="primary" id="createOwn">✦ Create your own</button>`);
+  const builtInIds = new Set(builtIns.map(a => a.id));
+  for (const puzzle of library()) {
+    const done = progress(puzzle), card = document.createElement('div');
+    card.className = 'puzzle-card' + (puzzle.id === art.id ? ' current' : '');
+    card.innerHTML = `<button class="puzzle-pick"><img alt="" src="${thumbnail(puzzle)}"><span class="puzzle-title">${esc(puzzle.title)}</span><span class="puzzle-progress">${done === null ? 'New' : done === 1 ? 'Complete' : `${Math.floor(done * 100)}%`}</span></button>`;
+    card.querySelector('.puzzle-pick').onclick = () => { $('modal').close(); if (puzzle.id !== art.id) openPuzzle(puzzle); };
+    if (!builtInIds.has(puzzle.id)) {
+      const remove = document.createElement('button');
+      remove.className = 'puzzle-remove'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${puzzle.title}`);
+      remove.onclick = () => {
+        if (!confirm(`Remove “${puzzle.title}” and its progress?`)) return;
+        removeCustom(puzzle.id);
+        if (puzzle.id === art.id) openPuzzle(builtIns[0]);
+        puzzleMenu();
+      };
+      card.append(remove);
+    }
+    $('puzzleList').append(card);
+  }
+  $('createOwn').onclick = () => unlocked() ? openCreate() : passwordPrompt();
+}
+$('menu').onclick = () => { if (!busy) puzzleMenu(); };
+
+function passwordPrompt(note = '') {
+  show(`<p class="eyebrow">CREATE YOUR OWN</p><h2>Password</h2><p id="unlockNote">${esc(note || 'Making new puzzles needs the password.')}</p><form id="unlockForm" class="unlock"><input id="password" type="password" autocomplete="current-password" aria-label="Password" required><button class="primary" type="submit">Unlock</button></form>`);
+  $('password').focus();
+  $('unlockForm').onsubmit = async e => {
+    e.preventDefault();
+    const button = e.target.querySelector('button'); button.disabled = true;
+    try { await unlock($('password').value); $('modal').close(); openCreate(); }
+    catch (error) { $('unlockNote').textContent = error.message; button.disabled = false; $('password').select(); }
+  };
+}
+
+// The create bar sits at the bottom of the screen; results come back as candidates to pick from.
+let creating = false;
+function openCreate() {
+  $('create').hidden = false; document.body.classList.add('creating');
+  $('createStatus').textContent = 'Describe a picture. You’ll get four to choose from.';
+  $('prompt').focus();
+}
+$('createClose').onclick = () => { $('create').hidden = true; document.body.classList.remove('creating'); };
+const status = text => { $('createStatus').textContent = text; };
+$('create').onsubmit = async e => {
+  e.preventDefault();
+  const prompt = $('prompt').value.trim();
+  if (!prompt || creating) return;
+  creating = true; $('createGo').disabled = true; status('Sending your idea…');
+  try {
+    const job = await generate(prompt, job => {
+      if (job.status === 'queued') status(job.ahead ? `Waiting in line (${job.ahead} ahead)…` : 'Starting…');
+      else if (job.status === 'writing') status('Thinking about your idea…');
+      else if (job.status === 'painting') status(`Painting “${job.subject}” — ${job.painted} of ${job.total}…`);
+    });
+    status('Cutting the jewels…');
+    const choices = await Promise.all(job.images.map(src => pictureToArt(src, { title: prompt[0].toUpperCase() + prompt.slice(1, 60) })));
+    status(''); pickCandidate(prompt, choices);
+  } catch (error) {
+    if (error instanceof GeneratorError && error.status === 401) { $('createClose').onclick(); passwordPrompt('Please enter the password again.'); }
+    else status(error.message || 'Something went wrong.');
+  } finally { creating = false; $('createGo').disabled = false; }
+};
+
+function pickCandidate(prompt, choices) {
+  show(`<p class="eyebrow">CREATE YOUR OWN</p><h2>Pick one</h2><p>${esc(prompt)}</p><div class="candidates" id="candidates"></div><button class="primary" id="again">Try again</button>`);
+  choices.forEach((choice, n) => {
+    const button = document.createElement('button');
+    button.className = 'candidate'; button.setAttribute('aria-label', `Option ${n + 1}, ${choice.colors.length} colors`);
+    button.innerHTML = `<img alt="" src="${thumbnail({ ...choice, id: `choice-${Date.now()}-${n}` }, 4)}"><span>${choice.colors.length} colors</span>`;
+    button.onclick = () => {
+      const puzzle = { ...choice, id: `custom-${Date.now().toString(36)}` };
+      if (!addCustom(puzzle)) { status('This browser could not save the puzzle.'); return; }
+      $('modal').close(); $('createClose').onclick(); $('prompt').value = '';
+      openPuzzle(puzzle);
+    };
+    $('candidates').append(button);
+  });
+  $('again').onclick = () => { $('modal').close(); $('create').requestSubmit(); };
+}
+
+openPuzzle(library().find(a => a.id === currentId()) || builtIns[0]);

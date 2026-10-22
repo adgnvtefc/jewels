@@ -51,6 +51,32 @@ dialog p { font-size: 14px; line-height: 1.7; color: #748478; }
 dialog .eyebrow { font-size: 9px; letter-spacing: 2px; }
 dialog img { display: block; width: 100%; image-rendering: pixelated; border-radius: 10px; margin-top: 30px; }
 .primary { background: #3f6d59; color: #fff; padding: 14px 22px; border-radius: 30px; margin-top: 12px; width: 100%; font-size: 13px; }
+.puzzle-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 18px 0 6px; }
+.puzzle-card { position: relative; }
+.puzzle-pick { display: grid; gap: 4px; width: 100%; padding: 8px; border-radius: 14px; background: #fff; border: 1px solid #e3e6da; text-align: left; }
+.puzzle-card.current .puzzle-pick { border-color: #3f6d59; box-shadow: 0 0 0 1px #3f6d59; }
+dialog .puzzle-pick img, dialog .candidate img { margin: 0; border-radius: 6px; aspect-ratio: 1; }
+.puzzle-title { font-size: 12px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.puzzle-progress { font-size: 10px; color: #748478; }
+.puzzle-remove { position: absolute; top: 2px; right: 2px; width: 32px; height: 32px; border-radius: 50%; background: #f8f7f2e6; font-size: 18px; line-height: 1; }
+.unlock input, .create input {
+  font: inherit; font-size: 16px; color: inherit; width: 100%; min-height: 44px; padding: 10px 14px;
+  border: 1px solid #d9ddcf; border-radius: 22px; background: #fff;
+}
+.unlock input:focus-visible, .create input:focus-visible { outline: 3px solid #c47b46; outline-offset: 1px; }
+.candidates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 14px 0 4px; }
+.candidate { display: grid; gap: 4px; padding: 8px; border-radius: 14px; background: #fff; border: 1px solid #e3e6da; font-size: 10px; color: #748478; }
+.create {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; margin: 0 auto; max-width: 600px;
+  padding: 10px max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+  background: #f8f7f2f2; border-top: 1px solid #e3e6da; box-shadow: 0 -8px 30px #193a4418; backdrop-filter: blur(8px);
+}
+.create[hidden] { display: none; }
+.create-row { display: flex; gap: 6px; align-items: center; }
+#createGo { min-height: 44px; padding: 0 18px; border-radius: 22px; background: #3f6d59; color: #fff; font-size: 13px; flex: none; }
+#createClose { width: 44px; height: 44px; font-size: 22px; flex: none; }
+#createStatus { margin: 6px 6px 0; min-height: 1.4em; font-size: 12px; color: #748478; }
+body.creating .app { padding-bottom: 120px; }
 @media (min-width: 650px) { .app { padding-top: 12px; } }
 @media (orientation: landscape) and (max-height: 600px) {
   .app { max-width: none; display: grid; grid-template-columns: minmax(0,1fr) minmax(160px,240px); align-items: center; gap: 8px; }

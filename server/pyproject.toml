@@ -1,0 +1,18 @@
+[project]
+name = "little-jewel-generator"
+version = "0.1.0"
+description = "Password-protected picture generator for Little Jewel custom puzzles"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "mflux==0.23.0",
+    # Pillow 13 imports a module missing from Python 3.12, which breaks mflux at startup.
+    "pillow<13",
+    "python-dotenv>=1.0",
+    "harness",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+harness = { path = "../../harness", editable = true }

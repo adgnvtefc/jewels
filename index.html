@@ -21,8 +21,17 @@
       <div id="shelf" aria-label="Temporary jewel shelf"></div>
       <button id="addShelf" class="add-shelf" aria-describedby="shelfScrollNote">+ Add shelf space*</button>
       <p id="shelfScrollNote" class="shelf-scroll-note">* Shelf is scrollable.</p>
+      <button id="menu" class="add-shelf" aria-label="Choose a puzzle">☰ Puzzles</button>
     </section>
   </main>
+  <form id="create" class="create" hidden aria-label="Create your own puzzle">
+    <div class="create-row">
+      <input id="prompt" maxlength="200" placeholder="Create your own…" autocomplete="off" enterkeyhint="go" aria-label="Describe a picture to make into a puzzle">
+      <button type="submit" id="createGo">Create</button>
+      <button type="button" id="createClose" aria-label="Close create your own">×</button>
+    </div>
+    <p id="createStatus" role="status"></p>
+  </form>
   <dialog id="modal"><button class="close" id="close" aria-label="Close dialog">×</button><div id="modalContent"></div></dialog>
   <script type="module" src="app.js"></script>
 </body>

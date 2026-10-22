@@ -1,2 +1,6 @@
 preview*.png
 .DS_Store
+server/.env
+server/.venv/
+__pycache__/
+server/logs/
