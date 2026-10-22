@@ -23,7 +23,7 @@ Progress saves in localStorage in the current browser and origin. It does not sy
 
 ## GitHub Pages
 
-The production URL is [https://momoswebsiteofthehour.com](https://momoswebsiteofthehour.com). The repository includes a `CNAME` file for that domain and a GitHub Actions workflow that tests and deploys the static game whenever `main` changes.
+The production URL is [https://momoswebsiteofthehour.com](https://momoswebsiteofthehour.com). A GitHub Actions workflow tests and deploys the static game whenever `main` changes. The custom domain is configured in the repository's Pages settings.
 
 In the repository's **Settings → Pages**, the build source must be **GitHub Actions** and the custom domain must be `momoswebsiteofthehour.com`. At the DNS provider, point the apex domain to GitHub Pages using GitHub's current documented apex-domain records. DNS propagation and HTTPS certificate issuance can take time after the first successful deployment.
 
