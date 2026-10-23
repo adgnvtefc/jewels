@@ -20,6 +20,10 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid #c47b46; outline
 .board-wrap { width: 100%; }
 #viewport { width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: 3px; background: #f9f9f4; touch-action: none; cursor: pointer; }
 canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.progress { display: flex; align-items: center; gap: 8px; padding: 6px 4px 0; }
+.progress-track { flex: 1; height: 4px; border-radius: 2px; background: #e3e7dc; overflow: hidden; }
+#progressFill { width: 0; height: 100%; background: #658e76; transition: width .3s; }
+#progressText { min-width: 3ch; text-align: right; font-size: 10px; color: #748478; font-variant-numeric: tabular-nums; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .tray { padding: 8px 4px 0; }
 #shelf {
@@ -80,7 +84,8 @@ body.creating .app { padding-bottom: 120px; }
 @media (min-width: 650px) { .app { padding-top: 12px; } }
 @media (orientation: landscape) and (max-height: 600px) {
   .app { max-width: none; display: grid; grid-template-columns: minmax(0,1fr) minmax(160px,240px); align-items: center; gap: 8px; }
-  .board-wrap { width: min(100%,calc(100svh - 16px)); justify-self: center; }
-  .tray { align-self: center; }
+  .board-wrap { width: min(100%,calc(100svh - 16px)); justify-self: center; grid-row: 1 / 3; }
+  .progress { grid-column: 2; grid-row: 1; align-self: end; }
+  .tray { grid-column: 2; grid-row: 2; align-self: start; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }

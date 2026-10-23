@@ -1,4 +1,4 @@
-# Little Jewel
+# Pixel Game
 
 An iPhone-first jewel-sorting browser game, based on the board-and-shelf mechanics in the [Jewel Coloring walkthrough](https://www.youtube.com/watch?v=kdOWbqm7tuY). The first puzzle, "A little love", is imported exactly from `assets/original.pixil`: 32 × 32 pixels and 13 colors. **☰ Puzzles**, below the shelf, also offers the built-in puzzles listed in `assets/puzzles.json`, and anyone with the password can create their own from a prompt (see [Create your own](#create-your-own)).
 

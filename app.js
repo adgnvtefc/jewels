@@ -46,6 +46,10 @@ function update() {
     b.setAttribute('aria-pressed', String(selection?.kind === 'shelf' && selection.color === c));
   });
   $('addShelf').disabled = busy || state.shelf.length >= MAX_SHELF_SIZE;
+  const percent = Math.floor(correctCount(art, state) / total * 100);
+  $('progressFill').style.width = `${percent}%`;
+  $('progressText').textContent = `${percent}%`;
+  $('progress').setAttribute('aria-valuenow', String(percent));
   save(); draw();
 }
 // Visual states follow the reference: recessed socket, raised loose jewel,

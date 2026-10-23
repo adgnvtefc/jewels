@@ -1,4 +1,4 @@
-"""Picture generator for Little Jewel's "Create your own" puzzles.
+"""Picture generator for Pixel Game's "Create your own" puzzles.
 
 Runs on the Mac. A small HTTP API, usable only with the password in server/.env:
 the harness agent turns an idea into one drawable subject, Z-Image Turbo paints a
@@ -245,7 +245,7 @@ def main() -> None:
         raise SystemExit("Set JEWELS_PASSWORD in server/.env (see .env.example).")
     threading.Thread(target=worker, daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    print(f"Little Jewel generator on http://127.0.0.1:{PORT} (agent={'on' if USE_AGENT else 'off'})", flush=True)
+    print(f"Pixel Game generator on http://127.0.0.1:{PORT} (agent={'on' if USE_AGENT else 'off'})", flush=True)
     server.serve_forever()
 
 

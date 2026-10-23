@@ -6,16 +6,18 @@
   <meta name="theme-color" content="#f8f7f2">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Pixel Game">
   <meta name="description" content="Sort jewel groups between the board and a temporary shelf to restore your pixel artwork.">
-  <title>Little Jewel</title>
+  <title>Pixel Game</title>
   <link rel="icon" href="assets/art.png">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main class="app" aria-label="Little Jewel">
+  <main class="app" aria-label="Pixel Game">
     <section class="board-wrap" aria-label="Puzzle">
       <div id="viewport"><canvas id="board" tabindex="0" aria-label="Jewel sorting board. Tap a jewel group, then matching empty spaces or the shelf. Arrow keys move the cursor; Space selects or transfers."></canvas></div>
     </section>
+    <div class="progress" role="progressbar" id="progress" aria-label="Jewels at home" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-track"><div id="progressFill"></div></div><span id="progressText">0%</span></div>
     <p id="instruction" class="sr-only" role="status">Tap a jewel group, then the shelf.</p>
     <section class="tray" aria-label="Jewel storage">
       <div id="shelf" aria-label="Temporary jewel shelf"></div>
