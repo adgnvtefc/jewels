@@ -1,6 +1,6 @@
 # Pixel Game
 
-An iPhone-first jewel-sorting browser game, based on the board-and-shelf mechanics in the [Jewel Coloring walkthrough](https://www.youtube.com/watch?v=kdOWbqm7tuY). The first puzzle, "A little love", is imported exactly from `assets/original.pixil`: 32 × 32 pixels and 13 colors. **☰ Puzzles**, below the shelf, also offers the built-in puzzles listed in `assets/puzzles.json`, and anyone with the password can create their own from a prompt (see [Create your own](#create-your-own)).
+An iPhone-first jewel-sorting browser game, based on the board-and-shelf mechanics in the [Jewel Coloring walkthrough](https://www.youtube.com/watch?v=kdOWbqm7tuY). The first puzzle, "A little love", is imported exactly from `assets/original.pixil`: 32 × 32 pixels and 13 colors. It is the first of the levels listed in `assets/puzzles.json`, and anyone with the password can create their own puzzles from a prompt (see [Create your own](#create-your-own)).
 
 ## Play
 
@@ -19,17 +19,23 @@ Target squares and the central jewel faces retain the original colors. State is 
 
 Your selected color stays active after transfers, including partial transfers and moves between board and shelf. Remaining shelf jewels slide forward into earlier slots without changing their order. Tap a selected group again to cancel; select another jewel to change colors. The board starts fully visible. Pinch to zoom in or out and drag to pan; mouse and trackpad wheel zoom is also supported. There is no zoom, Fit, Undo, or Hint toolbar. Keyboard: focus the canvas, move with arrows and use Space/Enter to select or transfer; Escape clears the selection. Shelf slots are keyboard-accessible buttons.
 
-The mobile layout places the board within four pixels of the screen edges (outside device safe areas). The shelf uses compact rows and scrolls when expanded; below it are Add shelf space and ☰ Puzzles. Gameplay messages remain available to screen readers without taking space on the screen.
+The mobile layout places the board within four pixels of the screen edges (outside device safe areas). The shelf uses compact rows and scrolls when expanded; below it are Add shelf space and ☰ Menu, which returns to the start screen. Gameplay messages remain available to screen readers without taking space on the screen.
 
 Progress saves in localStorage in the current browser and origin. It does not sync between devices or from local preview to the published site. Private browsing or clearing browser data may remove it. Sorting progress uses a separate save key from the previous color-by-number prototype, whose saves are left untouched.
 
-## Choosing a puzzle
+## Start screen
 
-Tap **☰ Puzzles** below the shelf to see every puzzle with its thumbnail and progress, and tap one to play it. Each puzzle keeps its own progress, and the game reopens the last one you played. Puzzles you created show a × to remove them along with their progress. Created puzzles live in this browser's localStorage, like progress, so they do not sync between devices.
+The game always opens on the start screen, including after a reload. It has three buttons:
+
+- **Start game** plays the levels in order: the built-in puzzles, in the order of `assets/puzzles.json`. It opens the first level not yet finished, resuming any saved progress, and the row of squares above it shows finished levels as thumbnails; unfinished ones are blank, with the next one outlined. Once every level is finished, the button is disabled.
+- **Free play** lists the puzzles you created, with their progress, plus **✦ Create your own**. Your puzzles show a × to remove them along with their progress. Created puzzles live in this browser's localStorage, like progress, so they do not sync between devices.
+- **Gallery** shows every finished picture, levels first and then your own. Close it with ×.
+
+Finishing a puzzle shows the completed picture; closing that returns to the start screen. **☰ Menu** below the shelf also returns there, keeping your progress.
 
 ## Create your own
 
-**✦ Create your own** in the puzzle menu asks for the password. The server checks it, so it never appears in this public repository; once accepted, the browser remembers it. A bar then opens at the bottom of the screen: describe a picture, wait about 20–25 seconds, and pick one of four versions. That version becomes a new puzzle.
+**✦ Create your own** in Free play asks for the password. The server checks it, so it never appears in this public repository; once accepted, the browser remembers it. A bar then opens at the bottom of the screen: describe a picture, wait about 20–25 seconds, and pick one of four versions. That version becomes a new puzzle.
 
 How it works:
 
@@ -68,6 +74,6 @@ Open the resulting HTTPS URL in iPhone Safari. Safe-area padding and responsive 
 
 ## Implementation and verification
 
-`game.js` contains the puzzle state and legal transfers; `app.js` renders the board, gestures, animated transfers, the puzzle menu and the create bar. `library.js` loads built-in puzzles and stores created ones; `generator.js` talks to the generator; `convert.js` turns a picture into puzzle art. `assets/art.json` preserves the imported image. The deterministic scramble exchanges connected patches while preserving the exact color inventory. It is a recreation of the observed mechanics with our own puzzle generation, not the original game's level data.
+`game.js` contains the puzzle state and legal transfers; `app.js` renders the board, gestures, animated transfers, the start screen, free play, the gallery and the create bar. `library.js` loads built-in puzzles and stores created ones; `generator.js` talks to the generator; `convert.js` turns a picture into puzzle art. `assets/art.json` preserves the imported image. The deterministic scramble exchanges connected patches while preserving the exact color inventory. It is a recreation of the observed mechanics with our own puzzle generation, not the original game's level data.
 
-`npm test` also loads the actual app entry point against a small DOM to verify transfers, shelf selections without camera changes, pinch zoom, gesture cancellation, and the puzzle menu. The puzzle tests check the tutorial's full board → shelf → board sequence, diagonal connectivity, disconnected destinations, shelf limits, invalid transfers, inventory conservation, deterministic scrambling and save validation. `convert.test.js` checks that the original art converts back exactly, that a noisy picture becomes a solvable puzzle with no isolated pixels, and that every built-in puzzle can be finished using hint moves. There are no frameworks, remote fonts, analytics, or external runtime dependencies.
+`npm test` also loads the actual app entry point against a small DOM to verify transfers, shelf selections without camera changes, pinch zoom, gesture cancellation, the start screen, free play, the gallery and returning to the start screen after a level. The puzzle tests check the tutorial's full board → shelf → board sequence, diagonal connectivity, disconnected destinations, shelf limits, invalid transfers, inventory conservation, deterministic scrambling and save validation. `convert.test.js` checks that the original art converts back exactly, that a noisy picture becomes a solvable puzzle with no isolated pixels, and that every built-in puzzle can be finished using hint moves. There are no frameworks, remote fonts, analytics, or external runtime dependencies.

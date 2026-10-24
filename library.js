@@ -3,7 +3,6 @@
 import { restore, correctCount } from './game.js';
 
 const CUSTOM = 'little-jewel:custom-puzzles';
-const CURRENT = 'little-jewel:current-puzzle';
 export const saveKey = id => `little-jewel:sorting-v2:${id}`;
 
 const read = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
@@ -24,8 +23,6 @@ export function removeCustom(id) {
   write(CUSTOM, customPuzzles().filter(a => a.id !== id));
   try { localStorage.removeItem(saveKey(id)); } catch {}
 }
-export const currentId = () => read(CURRENT, null);
-export const rememberCurrent = id => write(CURRENT, id);
 
 // Fraction of jewels home, or null for a puzzle never opened.
 export function progress(art) {

@@ -13,7 +13,14 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main class="app" aria-label="Pixel Game">
+  <main id="home" class="home" aria-label="Pixel Game">
+    <h1>Pixel Game</h1>
+    <ol id="levels" class="levels" aria-label="Levels"></ol>
+    <button id="startGame" class="primary start-game">Start game<span id="startLevel"></span></button>
+    <button id="freePlay" class="home-button">Free play</button>
+    <button id="gallery" class="home-button">Gallery</button>
+  </main>
+  <main id="game" class="app" aria-label="Pixel Game" hidden>
     <section class="board-wrap" aria-label="Puzzle">
       <div id="viewport"><canvas id="board" tabindex="0" aria-label="Jewel sorting board. Tap a jewel group, then matching empty spaces or the shelf. Arrow keys move the cursor; Space selects or transfers."></canvas></div>
     </section>
@@ -23,7 +30,7 @@
       <div id="shelf" aria-label="Temporary jewel shelf"></div>
       <button id="addShelf" class="add-shelf" aria-describedby="shelfScrollNote">+ Add shelf space*</button>
       <p id="shelfScrollNote" class="shelf-scroll-note">* Shelf is scrollable.</p>
-      <button id="menu" class="add-shelf" aria-label="Choose a puzzle">☰ Puzzles</button>
+      <button id="menu" class="add-shelf" aria-label="Back to the start screen">☰ Menu</button>
     </section>
   </main>
   <form id="create" class="create" hidden aria-label="Create your own puzzle">

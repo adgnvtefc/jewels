@@ -35,6 +35,7 @@ async function mount() {
     animate: () => ({ finished: Promise.resolve() }),
     showModal() { this.open = true; }, close() { this.open = false; },
     set innerHTML(markup) {
+      this.markup = markup;
       for (const [, id] of markup.matchAll(/id="([^"]+)"/g)) elements[id] = element();
     },
   });
@@ -73,6 +74,7 @@ async function mount() {
 
 test('minimal UI loads and transfers board → shelf → board without camera jumps', async () => {
   const t = await mount();
+  t.elements.startGame.onclick();
   assert.equal(t.app.view().zoom, 1);
   for (const id of ['fit', 'undo', 'hint', 'zoomIn', 'zoomOut']) assert.equal(t.elements[id], undefined);
   await t.tap(300, 100); // Blue jewels sitting on yellow.
@@ -91,10 +93,17 @@ test('minimal UI loads and transfers board → shelf → board without camera ju
   assert.ok(t.saved().shelf.every(c => c === -1));
   assert.equal(t.saved().selectedColor, 0);
   assert.equal(t.elements.modal.open, true);
+  t.elements.modal.close(); t.elements.modal.onclose();
+  assert.equal(t.elements.home.hidden, false, 'a finished level returns to the start screen');
+  assert.equal(t.elements.game.hidden, true);
+  assert.equal(t.elements.startGame.disabled, true, 'the only level is complete');
+  t.elements.gallery.onclick();
+  assert.match(t.elements.modalContent.markup, /gallery-item/);
 });
 
 test('pinch zooms in and out, never moves jewels, and a cancelled gesture leaves taps usable', async () => {
   const t = await mount();
+  t.elements.startGame.onclick();
   const before = JSON.stringify(t.saved().board);
   t.board.onpointerdown(t.pointer(1, 100, 200, 'pointerdown'));
   t.board.onpointerdown(t.pointer(2, 300, 200, 'pointerdown'));
@@ -118,12 +127,20 @@ test('pinch zooms in and out, never moves jewels, and a cancelled gesture leaves
   assert.equal(t.saved().moves, 1);
 });
 
-test('the puzzle menu lists puzzles and Create your own asks for the password', async () => {
+test('the start screen offers levels, free play and the gallery; Menu returns to it', async () => {
   const t = await mount();
-  t.elements.menu.onclick();
+  assert.equal(t.elements.home.hidden, false);
+  assert.equal(t.elements.game.hidden, true);
+  assert.equal(t.elements.startLevel.textContent, 'Level 1 of 1');
+  t.elements.gallery.onclick();
+  assert.match(t.elements.modalContent.markup, /Finish a puzzle/);
+  t.elements.freePlay.onclick();
   assert.equal(t.elements.modal.open, true);
-  assert.equal(t.elements.puzzleList.children.length, 1);
   t.elements.createOwn.onclick();
   assert.ok(t.elements.unlockForm, 'without a saved password, the password form opens');
-  assert.equal(t.store['little-jewel:current-puzzle'], '"interaction-test"');
+  t.elements.modal.close();
+  t.elements.startGame.onclick();
+  assert.equal(t.elements.game.hidden, false);
+  t.elements.menu.onclick();
+  assert.equal(t.elements.home.hidden, false);
 });

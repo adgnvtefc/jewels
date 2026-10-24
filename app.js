@@ -1,12 +1,12 @@
 import { createPuzzle, select, transfer, correctCount, restore, shelfAction, continueSelection, expandShelf, MAX_SHELF_SIZE } from './game.js';
-import { builtInPuzzles, customPuzzles, addCustom, removeCustom, currentId, rememberCurrent, progress, thumbnail, saveKey } from './library.js';
+import { builtInPuzzles, customPuzzles, addCustom, removeCustom, progress, thumbnail, saveKey } from './library.js';
 import { unlocked, unlock, generate, pictureToArt, GeneratorError } from './generator.js';
 const $ = id => document.getElementById(id);
 let builtIns;
 try { builtIns = await builtInPuzzles(); }
 catch { $('instruction').textContent = 'The artwork could not load. Please refresh.'; throw new Error('Artwork unavailable'); }
 const library = () => [...builtIns, ...customPuzzles()];
-let art, key, state, selection, total = 0;
+let art, key, state, selection, total = 0, level = null;
 let busy = false, zoom = 1, ox = 0, oy = 0, size = 0;
 let cursor = 0, keyboard = false;
 const pointers = new Map();
@@ -201,7 +201,9 @@ async function move(kind, index) {
   try { await animate(motion); } finally { arrivals.clear(); busy = false; update(); }
   if (correctCount(art, state) === total) {
     const heading = art.id === 'love-garden-v1' ? 'Made with love.' : esc(art.title);
-    show(`<p class="eyebrow">EVERY JEWEL, BACK HOME</p><h2>${heading}</h2><p>You restored the picture in ${state.moves} moves.</p><img src="${thumbnail(art, 8)}" alt="Your completed artwork"><button class="primary" id="keep">Enjoy your artwork</button>`);
+    const eyebrow = level === null ? 'EVERY JEWEL, BACK HOME' : `LEVEL ${level + 1} COMPLETE`;
+    // However the dialog closes, a finished puzzle returns to the start screen.
+    show(`<p class="eyebrow">${eyebrow}</p><h2>${heading}</h2><p>You restored the picture in ${state.moves} moves.</p><img src="${thumbnail(art, 8)}" alt="Your completed artwork"><button class="primary" id="keep">Back to start</button>`, goHome);
     $('keep').onclick = () => $('modal').close();
   }
 }
@@ -248,7 +250,9 @@ canvas.onkeydown = e => {
   if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); tapBoard(cursor); }
   if (e.key === 'Escape') { selection=null; update(); }
 };
-function show(content) { $('modalContent').innerHTML=content; if (!$('modal').open) $('modal').showModal(); }
+let afterClose = null;
+function show(content, then = null) { afterClose=then; $('modalContent').innerHTML=content; if (!$('modal').open) $('modal').showModal(); }
+$('modal').onclose = () => { const next=afterClose; afterClose=null; next?.(); };
 $('close').onclick = () => $('modal').close();
 $('modal').onclick = e => { if(e.target===$('modal')){const r=$('modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('modal').close();} };
 $('addShelf').onclick=()=>{
@@ -258,43 +262,67 @@ $('addShelf').onclick=()=>{
 };
 const esc = text => String(text).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 
-function openPuzzle(next) {
-  art = next; key = saveKey(art.id); total = art.pixels.filter(c => c >= 0).length;
+// Two screens: the start screen (home) and the board (game). Reloading always starts at home.
+function goHome() {
+  $('game').hidden = true; $('home').hidden = false;
+  const next = nextLevel();
+  $('levels').innerHTML = builtIns.map((puzzle, n) => {
+    const done = progress(puzzle) === 1;
+    const label = `Level ${n + 1}${done ? ', complete' : n === next ? ', next' : ''}`;
+    return `<li class="level-pip${done ? ' done' : n === next ? ' current' : ''}" aria-label="${label}">${done ? `<img alt="" src="${thumbnail(puzzle)}">` : ''}</li>`;
+  }).join('');
+  $('startGame').disabled = next < 0;
+  $('startLevel').textContent = next < 0 ? 'All levels complete' : `Level ${next + 1} of ${builtIns.length}`;
+}
+// Levels are the built-in puzzles, in order; the next one is the first not yet finished.
+const nextLevel = () => builtIns.findIndex(puzzle => progress(puzzle) !== 1);
+$('startGame').onclick = () => { const next = nextLevel(); if (next >= 0) openPuzzle(builtIns[next], next); };
+$('menu').onclick = () => { if (!busy) goHome(); };
+
+function openPuzzle(next, levelIndex = null) {
+  art = next; level = levelIndex; key = saveKey(art.id); total = art.pixels.filter(c => c >= 0).length;
+  $('home').hidden = true; $('game').hidden = false;
   let saved;
   try { saved = JSON.parse(localStorage.getItem(key)); } catch {}
   state = restore(art, saved) || createPuzzle(art);
   selection = Number.isInteger(saved?.selectedColor) && saved.selectedColor >= 0 && saved.selectedColor < art.colors.length
     ? continueSelection(art,state,{kind:'color',color:saved.selectedColor,cells:[]}) : null;
   cursor = 0; keyboard = false; zoom = 1; ox = oy = 0;
-  rememberCurrent(art.id); constrain(); update();
-  message(`${art.title}. Tap a jewel group, then the shelf.`);
+  constrain(); update();
+  message(`${level === null ? '' : `Level ${level + 1}: `}${art.title}. Tap a jewel group, then the shelf.`);
 }
 
-// Puzzle menu: built-ins, then your creations, then the way to make more.
-function puzzleMenu() {
-  show(`<p class="eyebrow">CHOOSE A PICTURE</p><h2>Puzzles</h2><div class="puzzle-list" id="puzzleList"></div><button class="primary" id="createOwn">✦ Create your own</button>`);
-  const builtInIds = new Set(builtIns.map(a => a.id));
-  for (const puzzle of library()) {
+// Free play: pictures you created, and the way to make more.
+function freePlay() {
+  const mine = customPuzzles();
+  show(`<p class="eyebrow">FREE PLAY</p><h2>Your puzzles</h2>${mine.length ? '<div class="puzzle-list" id="puzzleList"></div>' : '<p>Nothing here yet. Describe a picture and it becomes a puzzle.</p>'}<button class="primary" id="createOwn">✦ Create your own</button>`);
+  for (const puzzle of mine) {
     const done = progress(puzzle), card = document.createElement('div');
-    card.className = 'puzzle-card' + (puzzle.id === art.id ? ' current' : '');
+    card.className = 'puzzle-card';
     card.innerHTML = `<button class="puzzle-pick"><img alt="" src="${thumbnail(puzzle)}"><span class="puzzle-title">${esc(puzzle.title)}</span><span class="puzzle-progress">${done === null ? 'New' : done === 1 ? 'Complete' : `${Math.floor(done * 100)}%`}</span></button>`;
-    card.querySelector('.puzzle-pick').onclick = () => { $('modal').close(); if (puzzle.id !== art.id) openPuzzle(puzzle); };
-    if (!builtInIds.has(puzzle.id)) {
-      const remove = document.createElement('button');
-      remove.className = 'puzzle-remove'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${puzzle.title}`);
-      remove.onclick = () => {
-        if (!confirm(`Remove “${puzzle.title}” and its progress?`)) return;
-        removeCustom(puzzle.id);
-        if (puzzle.id === art.id) openPuzzle(builtIns[0]);
-        puzzleMenu();
-      };
-      card.append(remove);
-    }
+    card.querySelector('.puzzle-pick').onclick = () => { $('modal').close(); openPuzzle(puzzle); };
+    const remove = document.createElement('button');
+    remove.className = 'puzzle-remove'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${puzzle.title}`);
+    remove.onclick = () => {
+      if (!confirm(`Remove “${puzzle.title}” and its progress?`)) return;
+      removeCustom(puzzle.id); freePlay();
+    };
+    card.append(remove);
     $('puzzleList').append(card);
   }
-  $('createOwn').onclick = () => unlocked() ? openCreate() : passwordPrompt();
+  $('createOwn').onclick = () => { if (unlocked()) { $('modal').close(); openCreate(); } else passwordPrompt(); };
 }
-$('menu').onclick = () => { if (!busy) puzzleMenu(); };
+$('freePlay').onclick = freePlay;
+
+// Gallery: every finished picture, levels first, then your own.
+function gallery() {
+  const done = library().filter(puzzle => progress(puzzle) === 1);
+  const name = puzzle => { const n = builtIns.indexOf(puzzle); return n < 0 ? esc(puzzle.title) : `Level ${n + 1}`; };
+  show(`<p class="eyebrow">GALLERY</p><h2>Finished pictures</h2>${done.length
+    ? `<div class="puzzle-list">${done.map(puzzle => `<figure class="gallery-item"><img alt="${esc(puzzle.title)}" src="${thumbnail(puzzle)}"><figcaption>${name(puzzle)}</figcaption></figure>`).join('')}</div>`
+    : '<p>Finish a puzzle and it will hang here.</p>'}`);
+}
+$('gallery').onclick = gallery;
 
 function passwordPrompt(note = '') {
   show(`<p class="eyebrow">CREATE YOUR OWN</p><h2>Password</h2><p id="unlockNote">${esc(note || 'Making new puzzles needs the password.')}</p><form id="unlockForm" class="unlock"><input id="password" type="password" autocomplete="current-password" aria-label="Password" required><button class="primary" type="submit">Unlock</button></form>`);
@@ -353,4 +381,4 @@ function pickCandidate(prompt, choices) {
   $('again').onclick = () => { $('modal').close(); $('create').requestSubmit(); };
 }
 
-openPuzzle(library().find(a => a.id === currentId()) || builtIns[0]);
+goHome();

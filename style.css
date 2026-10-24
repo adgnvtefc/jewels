@@ -6,6 +6,7 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; }
+[hidden] { display: none !important; }
 button {
   font: inherit; color: inherit; cursor: pointer;
   border: 0; background: none; -webkit-tap-highlight-color: transparent;
@@ -17,6 +18,21 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid #c47b46; outline
   width: 100%; max-width: 600px; margin: auto;
   padding: max(4px, env(safe-area-inset-top)) max(4px, env(safe-area-inset-right)) max(4px, env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
 }
+.home {
+  min-height: 100svh; max-width: 420px; margin: auto; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; text-align: center;
+  padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+.home h1 { font: 44px Georgia, serif; letter-spacing: -1px; margin: 0; }
+.levels { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; list-style: none; padding: 0; margin: 18px 0 22px; }
+.level-pip { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 9px; overflow: hidden; font-size: 13px; color: #a3ab9f; background: #ece9de; border: 1px solid #e3e6da; }
+.level-pip img { width: 100%; height: 100%; image-rendering: pixelated; }
+.level-pip.current { background: #fff; color: #3f6d59; font-weight: 600; border-color: #3f6d59; box-shadow: 0 0 0 1px #3f6d59; }
+.level-pip.done { border-color: #fff; box-shadow: 0 2px 6px #294b451a; }
+.home .primary, .home-button { width: 100%; max-width: 280px; margin: 0; }
+.start-game { display: grid; gap: 2px; font-size: 15px; }
+#startLevel { font-size: 11px; opacity: .8; }
+.home-button { min-height: 48px; border-radius: 30px; border: 1px solid #d9ddcf; background: #fff; font-size: 14px; color: #3c614f; }
 .board-wrap { width: 100%; }
 #viewport { width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: 3px; background: #f9f9f4; touch-action: none; cursor: pointer; }
 canvas { display: block; width: 100%; height: 100%; touch-action: none; }
@@ -59,9 +75,11 @@ dialog img { display: block; width: 100%; image-rendering: pixelated; border-rad
 .puzzle-card { position: relative; }
 .puzzle-pick { display: grid; gap: 4px; width: 100%; padding: 8px; border-radius: 14px; background: #fff; border: 1px solid #e3e6da; text-align: left; }
 .puzzle-card.current .puzzle-pick { border-color: #3f6d59; box-shadow: 0 0 0 1px #3f6d59; }
-dialog .puzzle-pick img, dialog .candidate img { margin: 0; border-radius: 6px; aspect-ratio: 1; }
+dialog .puzzle-pick img, dialog .candidate img, dialog .gallery-item img { margin: 0; border-radius: 6px; aspect-ratio: 1; }
 .puzzle-title { font-size: 12px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .puzzle-progress { font-size: 10px; color: #748478; }
+.gallery-item { display: grid; gap: 4px; margin: 0; padding: 8px; border-radius: 14px; background: #fff; border: 1px solid #e3e6da; }
+.gallery-item figcaption { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .puzzle-remove { position: absolute; top: 2px; right: 2px; width: 32px; height: 32px; border-radius: 50%; background: #f8f7f2e6; font-size: 18px; line-height: 1; }
 .unlock input, .create input {
   font: inherit; font-size: 16px; color: inherit; width: 100%; min-height: 44px; padding: 10px 14px;
@@ -75,12 +93,11 @@ dialog .puzzle-pick img, dialog .candidate img { margin: 0; border-radius: 6px; 
   padding: 10px max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
   background: #f8f7f2f2; border-top: 1px solid #e3e6da; box-shadow: 0 -8px 30px #193a4418; backdrop-filter: blur(8px);
 }
-.create[hidden] { display: none; }
 .create-row { display: flex; gap: 6px; align-items: center; }
 #createGo { min-height: 44px; padding: 0 18px; border-radius: 22px; background: #3f6d59; color: #fff; font-size: 13px; flex: none; }
 #createClose { width: 44px; height: 44px; font-size: 22px; flex: none; }
 #createStatus { margin: 6px 6px 0; min-height: 1.4em; font-size: 12px; color: #748478; }
-body.creating .app { padding-bottom: 120px; }
+body.creating .app, body.creating .home { padding-bottom: 120px; }
 @media (min-width: 650px) { .app { padding-top: 12px; } }
 @media (orientation: landscape) and (max-height: 600px) {
   .app { max-width: none; display: grid; grid-template-columns: minmax(0,1fr) minmax(160px,240px); align-items: center; gap: 8px; }
