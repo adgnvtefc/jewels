@@ -1,4 +1,4 @@
-import { createPuzzle, select, transfer, correctCount, restore, shelfAction, continueSelection, expandShelf, MAX_SHELF_SIZE } from './game.js';
+import { createPuzzle, select, transfer, correctCount, restore, shelfAction, continueSelection, expandShelf, MAX_SHELF_SIZE, SHELF_SIZE } from './game.js';
 import { builtInPuzzles, customPuzzles, addCustom, removeCustom, progress, thumbnail, saveKey, snapshot, mergeSaves, storeSnapshot, packSaves, unpackSaves } from './library.js';
 import { unlocked, unlock, generate, pictureToArt, GeneratorError, fetchSaves, sendSaves } from './generator.js';
 const $ = id => document.getElementById(id);
@@ -313,7 +313,20 @@ function goHome() {
   }).join('');
   $('startGame').disabled = next < 0;
   $('startLevel').textContent = next < 0 ? 'All levels complete' : `Level ${next + 1} of ${builtIns.length}`;
+  $('skipAhead').hidden = builtIns.length <= SKIP_TO || builtIns.slice(0, SKIP_TO).every(puzzle => progress(puzzle) === 1);
 }
+// Finishes levels 1-5 at once, each saved as its completed picture, for players who
+// already played them elsewhere. Saved like any finished level, so it syncs too.
+const SKIP_TO = 5;
+$('skipAhead').onclick = () => {
+  for (const puzzle of builtIns.slice(0, SKIP_TO)) {
+    if (progress(puzzle) === 1) continue;
+    try { localStorage.setItem(saveKey(puzzle.id), JSON.stringify({ board: [...puzzle.pixels], shelf: Array(SHELF_SIZE).fill(-1), moves: 0, selectedColor: null, savedAt: Date.now() })); } catch {}
+  }
+  track('skip_ahead', { to: SKIP_TO + 1 });
+  syncSoon(0);
+  goHome();
+};
 // Levels are the built-in puzzles, in order; the next one is the first not yet finished.
 const nextLevel = () => builtIns.findIndex(puzzle => progress(puzzle) !== 1);
 $('startGame').onclick = () => { const next = nextLevel(); if (next >= 0) openPuzzle(builtIns[next], next); };

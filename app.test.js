@@ -15,9 +15,10 @@ const inline = file => {
 // This catches missing-control crashes that pure puzzle tests cannot detect.
 const art = { id: 'interaction-test', width: 2, height: 2,
   colors: ['#0088ff', '#ffee00'], pixels: [0, 1, 0, 1] };
-async function mount({ location = { search: '', hostname: 'example.test' }, history = {}, wait = true,
+async function mount({ location = { search: '', hostname: 'example.test' }, history = {}, wait = true, levels = 1,
   saved: initial = { board: [1, 0, 1, 0], shelf: Array(24).fill(-1), moves: 0 } } = {}) {
-  let saved = initial;
+  // One save per puzzle; level 1 is `art`, and further levels are copies of it under their own ids.
+  const saves = { [art.id]: initial }, saved = () => saves[art.id];
   const ctx = new Proxy({}, {
     get(target, name) {
       if (name === 'createLinearGradient') return () => ({ addColorStop() {} });
@@ -52,18 +53,20 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
   })()`, {
     game, console, window: { devicePixelRatio: 1 },
     document: { getElementById: id => elements[id] ?? null, createElement: element, body: element() },
-    fetch: async url => ({ ok: true, json: async () => url.endsWith('puzzles.json') ? ['test.json'] : art }),
+    fetch: async url => ({ ok: true, json: async () => url.endsWith('puzzles.json')
+      ? Array.from({ length: levels }, (_, n) => `level-${n + 1}.json`)
+      : url.endsWith('level-1.json') ? art : { ...art, id: url.match(/(level-\d+)\.json$/)[1] } }),
     localStorage: {
-      getItem: key => key.startsWith(sorting) ? JSON.stringify(saved) : store[key] ?? null,
-      setItem: (key, value) => { if (key.startsWith(sorting)) saved = JSON.parse(value); else store[key] = value; },
-      removeItem: key => { delete store[key]; },
+      getItem: key => key.startsWith(sorting) ? (saves[key.slice(sorting.length)] ? JSON.stringify(saves[key.slice(sorting.length)]) : null) : store[key] ?? null,
+      setItem: (key, value) => { if (key.startsWith(sorting)) saves[key.slice(sorting.length)] = JSON.parse(value); else store[key] = value; },
+      removeItem: key => { delete store[key]; delete saves[key.slice(sorting.length)]; },
     },
     location, history, URLSearchParams, TextEncoder, TextDecoder, Blob, Response, CompressionStream, DecompressionStream, btoa, atob,
     setTimeout: (f, ms) => setTimeout(f, ms).unref(), clearTimeout,
     matchMedia: () => ({ matches: false }),
     ResizeObserver: class { constructor(callback) { this.callback = callback; } observe() { this.callback(); } },
   });
-  if (!wait) return { running, saved: () => saved };
+  if (!wait) return { running, saved };
   const app = await running;
   const pointer = (id, x, y, type) => ({ pointerId: id, pointerType: 'touch', clientX: x, clientY: y, type });
   const board = elements.board;
@@ -73,7 +76,7 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
     board.onpointerup(pointer(1, x, y, 'pointerup'));
     await settle();
   };
-  return { app, elements, board, pointer, tap, settle, saved: () => saved, store };
+  return { app, elements, board, pointer, tap, settle, saved, saves, store };
 }
 
 test('minimal UI loads and transfers board → shelf → board without camera jumps', async () => {
@@ -170,4 +173,22 @@ test('saves carried in the link are merged in on https, and the link is cleaned 
   assert.equal(cleaned, '/');
   assert.deepEqual(t.saved().board, [0, 1, 0, 1], 'the carried finished level replaces the fresh one');
   assert.equal(t.elements.startGame.disabled, true, 'the level shows as complete');
+});
+
+test('Fill and skip finishes levels 1-5, opens level 6 next, and then hides itself', async () => {
+  const t = await mount({ levels: 6 });
+  assert.equal(t.elements.skipAhead.hidden, false);
+  assert.equal(t.elements.startLevel.textContent, 'Level 1 of 6');
+  t.elements.skipAhead.onclick();
+  for (const id of ['interaction-test', 'level-2', 'level-3', 'level-4', 'level-5']) assert.deepEqual(t.saves[id].board, art.pixels, id);
+  assert.equal(t.saves['level-6'], undefined, 'level 6 is left to play');
+  assert.equal(t.elements.startLevel.textContent, 'Level 6 of 6');
+  assert.equal(t.elements.skipAhead.hidden, true);
+  t.elements.gallery.onclick();
+  assert.equal((t.elements.modalContent.markup.match(/gallery-item/g) || []).length, 5);
+});
+
+test('with five levels or fewer there is nothing to skip to', async () => {
+  const t = await mount();
+  assert.equal(t.elements.skipAhead.hidden, true);
 });

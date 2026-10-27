@@ -28,6 +28,7 @@ Progress saves in localStorage in the current browser and origin. Without the pa
 The game always opens on the start screen, including after a reload. It has three buttons:
 
 - **Start game** plays the levels in order: the built-in puzzles, in the order of `assets/puzzles.json`. It opens the first level not yet finished, resuming any saved progress, and the row of squares above it shows finished levels as thumbnails; unfinished ones are blank, with the next one outlined. Once every level is finished, the button is disabled.
+- **Fill and skip to level 6** marks levels 1–5 finished at once, each saved as its completed picture (it leaves any already-finished level alone), and Start game then opens level 6. It is for players who already finished those levels somewhere their progress did not follow. Finished this way, the levels count like any others: they show in the row of squares and the gallery, and sync to the server with the password. The button disappears once levels 1–5 are all finished.
 - **Free play** lists the puzzles you created, with their progress, plus **✦ Create your own**. Your puzzles show a × to remove them along with their progress. Created puzzles live in this browser's localStorage, like progress, and sync to the server with the password.
 - **Gallery** shows every finished picture, levels first and then your own. Close it with ×.
 
