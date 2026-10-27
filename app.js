@@ -2,6 +2,8 @@ import { createPuzzle, select, transfer, correctCount, restore, shelfAction, con
 import { builtInPuzzles, customPuzzles, addCustom, removeCustom, progress, thumbnail, saveKey } from './library.js';
 import { unlocked, unlock, generate, pictureToArt, GeneratorError } from './generator.js';
 const $ = id => document.getElementById(id);
+// Analytics (catseye, embedded in index.html); a no-op when the embed is absent, as in tests.
+const track = (name, data) => globalThis.catseye?.(name, data);
 let builtIns;
 try { builtIns = await builtInPuzzles(); }
 catch { $('instruction').textContent = 'The artwork could not load. Please refresh.'; throw new Error('Artwork unavailable'); }
@@ -200,6 +202,7 @@ async function move(kind, index) {
   message(`${result.transfers.length} ${result.transfers.length === 1 ? 'jewel' : 'jewels'} ${kind === 'shelf' ? 'on the shelf. Now make room for their color.' : 'back where they belong.'}`);
   try { await animate(motion); } finally { arrivals.clear(); busy = false; update(); }
   if (correctCount(art, state) === total) {
+    track('level_complete', { puzzle: art.id, title: art.title, custom: !builtIns.some(a => a.id === art.id), moves: state.moves, colors: art.colors.length, jewels: total });
     const heading = art.id === 'love-garden-v1' ? 'Made with love.' : esc(art.title);
     const eyebrow = level === null ? 'EVERY JEWEL, BACK HOME' : `LEVEL ${level + 1} COMPLETE`;
     // However the dialog closes, a finished puzzle returns to the start screen.
@@ -330,8 +333,8 @@ function passwordPrompt(note = '') {
   $('unlockForm').onsubmit = async e => {
     e.preventDefault();
     const button = e.target.querySelector('button'); button.disabled = true;
-    try { await unlock($('password').value); $('modal').close(); openCreate(); }
-    catch (error) { $('unlockNote').textContent = error.message; button.disabled = false; $('password').select(); }
+    try { await unlock($('password').value); track('login', { ok: true }); $('modal').close(); openCreate(); }
+    catch (error) { track('login', { ok: false, error: error.message, status: error.status }); $('unlockNote').textContent = error.message; button.disabled = false; $('password').select(); }
   };
 }
 
@@ -349,6 +352,7 @@ $('create').onsubmit = async e => {
   const prompt = $('prompt').value.trim();
   if (!prompt || creating) return;
   creating = true; $('createGo').disabled = true; status('Sending your idea…');
+  const started = Date.now();
   try {
     const job = await generate(prompt, job => {
       if (job.status === 'queued') status(job.ahead ? `Waiting in line (${job.ahead} ahead)…` : 'Starting…');
@@ -357,8 +361,10 @@ $('create').onsubmit = async e => {
     });
     status('Cutting the jewels…');
     const choices = await Promise.all(job.images.map(src => pictureToArt(src, { title: prompt[0].toUpperCase() + prompt.slice(1, 60) })));
+    track('llm_generate', { ok: true, prompt, subject: job.subject, agent: job.agent, images: job.images.length, seconds: job.seconds, ms: Date.now() - started });
     status(''); pickCandidate(prompt, choices);
   } catch (error) {
+    track('llm_generate', { ok: false, prompt, error: error.message, status: error.status, ms: Date.now() - started });
     if (error instanceof GeneratorError && error.status === 401) { $('createClose').onclick(); passwordPrompt('Please enter the password again.'); }
     else status(error.message || 'Something went wrong.');
   } finally { creating = false; $('createGo').disabled = false; }
@@ -373,6 +379,7 @@ function pickCandidate(prompt, choices) {
     button.onclick = () => {
       const puzzle = { ...choice, id: `custom-${Date.now().toString(36)}` };
       if (!addCustom(puzzle)) { status('This browser could not save the puzzle.'); return; }
+      track('llm_pick', { prompt, option: n + 1, colors: choice.colors.length });
       $('modal').close(); $('createClose').onclick(); $('prompt').value = '';
       openPuzzle(puzzle);
     };
