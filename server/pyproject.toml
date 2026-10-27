@@ -8,11 +8,11 @@ dependencies = [
     # Pillow 13 imports a module missing from Python 3.12, which breaks mflux at startup.
     "pillow<13",
     "python-dotenv>=1.0",
-    "harness",
+    "orchestra",
 ]
 
 [tool.uv]
 package = false
 
 [tool.uv.sources]
-harness = { path = "../../harness", editable = true }
+orchestra = { path = "../../harness", editable = true }

@@ -61,10 +61,10 @@ def subject_for(idea: str) -> tuple[str, bool]:
     if not USE_AGENT:
         return idea, False
     try:
-        from harness.config import Project
-        from harness.orchestrator import new_conversation
+        from orchestra.config import Project
+        from orchestra.orchestrator import new_conversation
 
-        answer = new_conversation("artist", project=Project.at(ROOT)).turn(idea).answer
+        answer = new_conversation("artist", app="jewels", project=Project.at(ROOT)).turn(idea).answer
         answer = re.sub(r"<think>.*?</think>", "", answer or "", flags=re.S).strip()
         line = next((l.strip(" \"'`*") for l in answer.splitlines() if l.strip()), "").rstrip(".")
         if line:
