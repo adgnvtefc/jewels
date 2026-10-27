@@ -13,10 +13,11 @@ const inline = file => {
 
 // Run the real app entry point against its actual HTML IDs and a small DOM.
 // This catches missing-control crashes that pure puzzle tests cannot detect.
-async function mount() {
-  const art = { id: 'interaction-test', width: 2, height: 2,
-    colors: ['#0088ff', '#ffee00'], pixels: [0, 1, 0, 1] };
-  let saved = { board: [1, 0, 1, 0], shelf: Array(24).fill(-1), moves: 0 };
+const art = { id: 'interaction-test', width: 2, height: 2,
+  colors: ['#0088ff', '#ffee00'], pixels: [0, 1, 0, 1] };
+async function mount({ location = { search: '', hostname: 'example.test' }, history = {}, wait = true,
+  saved: initial = { board: [1, 0, 1, 0], shelf: Array(24).fill(-1), moves: 0 } } = {}) {
+  let saved = initial;
   const ctx = new Proxy({}, {
     get(target, name) {
       if (name === 'createLinearGradient') return () => ({ addColorStop() {} });
@@ -45,7 +46,7 @@ async function mount() {
     + ['./convert.js', './library.js', './generator.js'].map(inline).join('\n')
     + readFileSync(new URL('./app.js', import.meta.url), 'utf8').replace(/^import .*$/gm, '');
   const store = {}, sorting = 'little-jewel:sorting-v2:';
-  const app = await runInNewContext(`(async () => {
+  const running = runInNewContext(`(async () => {
     ${source}
     return { view: () => ({zoom, ox, oy}), isBusy: () => busy };
   })()`, {
@@ -57,10 +58,13 @@ async function mount() {
       setItem: (key, value) => { if (key.startsWith(sorting)) saved = JSON.parse(value); else store[key] = value; },
       removeItem: key => { delete store[key]; },
     },
-    location: { search: '', hostname: 'example.test' }, URLSearchParams,
+    location, history, URLSearchParams, TextEncoder, TextDecoder, Blob, Response, CompressionStream, DecompressionStream, btoa, atob,
+    setTimeout: (f, ms) => setTimeout(f, ms).unref(), clearTimeout,
     matchMedia: () => ({ matches: false }),
     ResizeObserver: class { constructor(callback) { this.callback = callback; } observe() { this.callback(); } },
   });
+  if (!wait) return { running, saved: () => saved };
+  const app = await running;
   const pointer = (id, x, y, type) => ({ pointerId: id, pointerType: 'touch', clientX: x, clientY: y, type });
   const board = elements.board;
   const settle = async () => { await new Promise(resolve => setImmediate(resolve)); assert.equal(app.isBusy(), false); };
@@ -143,4 +147,27 @@ test('the start screen offers levels, free play and the gallery; Menu returns to
   assert.equal(t.elements.game.hidden, false);
   t.elements.menu.onclick();
   assert.equal(t.elements.home.hidden, false);
+});
+
+test('a visit to the http address hands its saves to https in the link and leaves', async () => {
+  let destination = null;
+  const location = { protocol: 'http:', hostname: 'momoswebsiteofthehour.com', pathname: '/', search: '', replace: url => { destination = url; } };
+  const { running } = await mount({ location, wait: false });
+  running.catch(() => {});
+  for (let i = 0; i < 20 && !destination; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.match(destination, /^https:\/\/momoswebsiteofthehour\.com\/(#carry=[zj][\w-]+)?$/);
+});
+
+test('saves carried in the link are merged in on https, and the link is cleaned up', async () => {
+  const { packSaves } = await import('./library.js');
+  const solved = { board: [0, 1, 0, 1], shelf: Array(24).fill(-1), moves: 4, savedAt: 1 };
+  const carry = await packSaves({ saves: { 'interaction-test': solved }, custom: [], removed: [] });
+  let cleaned = null;
+  const t = await mount({
+    location: { protocol: 'https:', hostname: 'momoswebsiteofthehour.com', pathname: '/', search: '', hash: `#carry=${carry}` },
+    history: { replaceState: (_, __, url) => { cleaned = url; } },
+  });
+  assert.equal(cleaned, '/');
+  assert.deepEqual(t.saved().board, [0, 1, 0, 1], 'the carried finished level replaces the fresh one');
+  assert.equal(t.elements.startGame.disabled, true, 'the level shows as complete');
 });

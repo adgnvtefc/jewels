@@ -7,7 +7,12 @@ few candidates, and the game converts the chosen picture into a puzzle in the br
     POST /api/unlock     {"password": "..."}            -> 200 {"ok": true} or 401
     POST /api/jobs       {"prompt": "..."}  + Bearer    -> 202 {"id": "..."}
     GET  /api/jobs/<id>                     + Bearer    -> status, then images
+    GET  /api/saves                         + Bearer    -> {"version": n, "data": {...}}
+    PUT  /api/saves  {"version": n, "data"} + Bearer    -> {"version": n + 1}, or 409 with the current copy
     GET  /api/health                                    -> {"model": "ready" | "loading" | "error"}
+
+Saves are one shared copy for everyone with the password; the game merges before it
+sends, and the version check stops two browsers from overwriting each other.
 """
 
 import base64
@@ -44,7 +49,9 @@ CANDIDATES = 4
 MAX_WAITING = 5
 MAX_PROMPT = 200
 MAX_BODY = 4096
+MAX_SAVES_BODY = 2 * 1024 * 1024
 KEEP_JOBS = 30
+SAVES_FILE = Path(os.environ.get("SAVES_FILE", ROOT / "data" / "saves.json"))
 # Bold, flat, outlined icons on a plain background survive the trip down to 32x32.
 STYLE = ("flat vector icon style, bold simple shapes, thick dark outlines, at most 8 flat colors, "
          "no gradients, no text, plain solid light background")
@@ -52,6 +59,7 @@ STYLE = ("flat vector icon style, bold simple shapes, thick dark outlines, at mo
 jobs: dict[str, dict] = {}
 waiting: queue.Queue[str] = queue.Queue()
 lock = threading.Lock()
+saves_lock = threading.Lock()
 model_state = {"status": "loading", "error": None}
 failures: deque[float] = deque()
 
@@ -123,6 +131,27 @@ def worker() -> None:
             update(job_id, status="error", error=str(error)[:200])
 
 
+def read_saves() -> dict:
+    try:
+        return json.loads(SAVES_FILE.read_text())
+    except FileNotFoundError:
+        return {"version": 0, "data": {"saves": {}, "custom": [], "removed": []}}
+
+
+def valid_saves(data) -> bool:
+    return (isinstance(data, dict) and isinstance(data.get("saves"), dict) and len(data["saves"]) <= 2000
+            and isinstance(data.get("custom"), list) and len(data["custom"]) <= 500
+            and isinstance(data.get("removed"), list) and len(data["removed"]) <= 5000)
+
+
+def write_saves(record: dict) -> None:
+    # Write a new file, then swap it in, so a crash never leaves half a save.
+    SAVES_FILE.parent.mkdir(exist_ok=True)
+    temporary = SAVES_FILE.with_suffix(".tmp")
+    temporary.write_text(json.dumps(record))
+    os.replace(temporary, SAVES_FILE)
+
+
 def public_view(job: dict) -> dict:
     view = {k: job.get(k) for k in ("id", "status", "subject", "agent", "painted", "error", "seconds")}
     view["total"] = CANDIDATES
@@ -157,14 +186,14 @@ class Handler(BaseHTTPRequestHandler):
         if origin in ORIGINS:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
             self.send_header("Access-Control-Max-Age", "600")
         self.end_headers()
 
-    def body(self) -> dict | None:
+    def body(self, limit: int = MAX_BODY) -> dict | None:
         length = int(self.headers.get("Content-Length") or 0)
-        if not 0 < length <= MAX_BODY:
+        if not 0 < length <= limit:
             return None
         try:
             data = json.loads(self.rfile.read(length))
@@ -197,6 +226,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/api/health":
             return self.send(200, {"model": model_state["status"], "agent": USE_AGENT})
+        if self.path == "/api/saves":
+            if self.bearer():
+                with saves_lock:
+                    self.send(200, read_saves())
+            return
         match = re.fullmatch(r"/api/jobs/([0-9a-f]{32})", self.path)
         if not match:
             return self.send(404, {"error": "Not found."})
@@ -235,6 +269,21 @@ class Handler(BaseHTTPRequestHandler):
                     del jobs[old["id"]]
         waiting.put(job_id)
         self.send(202, {"id": job_id})
+
+    def do_PUT(self) -> None:
+        if self.path != "/api/saves":
+            return self.send(404, {"error": "Not found."})
+        if not self.bearer():
+            return
+        body = self.body(MAX_SAVES_BODY)
+        if body is None or not isinstance(body.get("version"), int) or not valid_saves(body.get("data")):
+            return self.send(400, {"error": "Bad request."})
+        with saves_lock:
+            current = read_saves()
+            if body["version"] != current["version"]:
+                return self.send(409, {"error": "Saved elsewhere first; merge and try again.", **current})
+            write_saves({"version": current["version"] + 1, "data": body["data"]})
+            self.send(200, {"version": current["version"] + 1})
 
     def log_message(self, format: str, *args) -> None:
         print(f"{self.address_string()} {format % args}", flush=True)

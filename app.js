@@ -1,12 +1,24 @@
 import { createPuzzle, select, transfer, correctCount, restore, shelfAction, continueSelection, expandShelf, MAX_SHELF_SIZE } from './game.js';
-import { builtInPuzzles, customPuzzles, addCustom, removeCustom, progress, thumbnail, saveKey } from './library.js';
-import { unlocked, unlock, generate, pictureToArt, GeneratorError } from './generator.js';
+import { builtInPuzzles, customPuzzles, addCustom, removeCustom, progress, thumbnail, saveKey, snapshot, mergeSaves, storeSnapshot, packSaves, unpackSaves } from './library.js';
+import { unlocked, unlock, generate, pictureToArt, GeneratorError, fetchSaves, sendSaves } from './generator.js';
 const $ = id => document.getElementById(id);
 // Analytics (catseye, embedded in index.html); a no-op when the embed is absent, as in tests.
 const track = (name, data) => globalThis.catseye?.(name, data);
+// The site lives on https. Browsers keep http and https saves apart, so a visit to the
+// http address hands its saves to the https one in the link (never sent to a server) and leaves.
+const SITE = 'momoswebsiteofthehour.com';
+if (location.protocol === 'http:' && location.hostname === SITE) {
+  const saved = snapshot(), carry = Object.keys(saved.saves).length || saved.custom.length ? `#carry=${await packSaves(saved)}` : '';
+  location.replace(`https://${SITE}${location.pathname}${location.search}${carry}`);
+  await new Promise(() => {});
+}
 let builtIns;
 try { builtIns = await builtInPuzzles(); }
 catch { $('instruction').textContent = 'The artwork could not load. Please refresh.'; throw new Error('Artwork unavailable'); }
+if ((location.hash || '').startsWith('#carry=')) {
+  try { storeSnapshot(mergeSaves(snapshot(), await unpackSaves(location.hash.slice(7)), builtIns)); } catch {}
+  history.replaceState(null, '', location.pathname + location.search);
+}
 const library = () => [...builtIns, ...customPuzzles()];
 let art, key, state, selection, total = 0, level = null;
 let busy = false, zoom = 1, ox = 0, oy = 0, size = 0;
@@ -20,9 +32,33 @@ let arrivals = new Set();
 
 function message(text) { $('instruction').textContent = text; }
 function save() {
-  try { localStorage.setItem(key, JSON.stringify({ board: state.board, shelf: state.shelf, moves: state.moves, selectedColor: selection?.color ?? null })); }
+  try { localStorage.setItem(key, JSON.stringify({ board: state.board, shelf: state.shelf, moves: state.moves, selectedColor: selection?.color ?? null, savedAt: Date.now() })); }
   catch { message('Saving unavailable in this browser'); }
+  syncSoon();
 }
+
+// With the password, saves also live on the server, so every browser, address and Home
+// Screen copy shows the same progress. This browser's saves stay the fallback offline.
+let syncing = null, syncTimer = null;
+function syncSoon(ms = 4000) { clearTimeout(syncTimer); syncTimer = setTimeout(syncSaves, ms); }
+function syncSaves() {
+  if (!unlocked()) return Promise.resolve();
+  return syncing ??= (async () => {
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const remote = await fetchSaves();
+        // The puzzle on screen keeps its own copy; the board never changes under the player.
+        const open = $('game').hidden ? new Set() : new Set([art.id]);
+        const merged = mergeSaves(snapshot(), remote.data || {}, builtIns, open);
+        storeSnapshot(merged);
+        try { await sendSaves(merged, remote.version); break; }
+        catch (error) { if (error.status !== 409) throw error; }
+      }
+      if (!$('home').hidden && !$('modal').open) goHome();
+    } catch {} finally { syncing = null; }
+  })();
+}
+document.addEventListener?.('visibilitychange', () => { if (document.visibilityState === 'hidden') syncSaves(); });
 function syncShelfButtons() {
   while(shelfButtons.length > state.shelf.length) shelfButtons.pop().remove();
   while(shelfButtons.length < state.shelf.length) {
@@ -203,6 +239,7 @@ async function move(kind, index) {
   try { await animate(motion); } finally { arrivals.clear(); busy = false; update(); }
   if (correctCount(art, state) === total) {
     track('level_complete', { puzzle: art.id, title: art.title, custom: !builtIns.some(a => a.id === art.id), moves: state.moves, colors: art.colors.length, jewels: total });
+    syncSoon(0);
     const heading = art.id === 'love-garden-v1' ? 'Made with love.' : esc(art.title);
     const eyebrow = level === null ? 'EVERY JEWEL, BACK HOME' : `LEVEL ${level + 1} COMPLETE`;
     // However the dialog closes, a finished puzzle returns to the start screen.
@@ -333,7 +370,7 @@ function passwordPrompt(note = '') {
   $('unlockForm').onsubmit = async e => {
     e.preventDefault();
     const button = e.target.querySelector('button'); button.disabled = true;
-    try { await unlock($('password').value); track('login', { ok: true }); $('modal').close(); openCreate(); }
+    try { await unlock($('password').value); track('login', { ok: true }); syncSaves(); $('modal').close(); openCreate(); }
     catch (error) { track('login', { ok: false, error: error.message, status: error.status }); $('unlockNote').textContent = error.message; button.disabled = false; $('password').select(); }
   };
 }
@@ -389,3 +426,4 @@ function pickCandidate(prompt, choices) {
 }
 
 goHome();
+syncSaves();
