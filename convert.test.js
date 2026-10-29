@@ -23,8 +23,8 @@ test('a noisy, non-square picture becomes a square, speck-free, solvable puzzle'
  assert.ok(out.pixels.every((c,i)=>region(out,i,j=>out.pixels[j]===c).length>1),'no lone jewels');
  assert.ok(solve(out),'hint moves finish the puzzle');
 });
-test('every built-in puzzle has a unique id and can be finished with hints',()=>{
- const files=JSON.parse(readFileSync(new URL('./assets/puzzles.json',import.meta.url))),ids=new Set();
+test('every built-in and bonus puzzle has a unique id and can be finished with hints',()=>{
+ const files=['puzzles.json','bonus.json'].flatMap(list=>JSON.parse(readFileSync(new URL(`./assets/${list}`,import.meta.url)))),ids=new Set();
  for(const file of files){const a=JSON.parse(readFileSync(new URL(`./assets/${file}`,import.meta.url)));
   assert.ok(a.id&&a.title&&!ids.has(a.id),file);ids.add(a.id);assert.equal(a.pixels.length,a.width*a.height);assert.ok(solve(a),file);}
 });

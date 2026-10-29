@@ -15,11 +15,15 @@ if (location.protocol === 'http:' && location.hostname === SITE) {
 let builtIns;
 try { builtIns = await builtInPuzzles(); }
 catch { $('instruction').textContent = 'The artwork could not load. Please refresh.'; throw new Error('Artwork unavailable'); }
+// Bonus puzzles live in Free play, apart from the numbered levels; the game works without them.
+let bonus = [];
+try { bonus = await builtInPuzzles('bonus.json'); } catch {}
+const shipped = () => [...builtIns, ...bonus];
 if ((location.hash || '').startsWith('#carry=')) {
-  try { storeSnapshot(mergeSaves(snapshot(), await unpackSaves(location.hash.slice(7)), builtIns)); } catch {}
+  try { storeSnapshot(mergeSaves(snapshot(), await unpackSaves(location.hash.slice(7)), shipped())); } catch {}
   history.replaceState(null, '', location.pathname + location.search);
 }
-const library = () => [...builtIns, ...customPuzzles()];
+const library = () => [...shipped(), ...customPuzzles()];
 let art, key, state, selection, total = 0, level = null;
 let busy = false, zoom = 1, ox = 0, oy = 0, size = 0;
 let cursor = 0, keyboard = false;
@@ -49,7 +53,7 @@ function syncSaves() {
         const remote = await fetchSaves();
         // The puzzle on screen keeps its own copy; the board never changes under the player.
         const open = $('game').hidden ? new Set() : new Set([art.id]);
-        const merged = mergeSaves(snapshot(), remote.data || {}, builtIns, open);
+        const merged = mergeSaves(snapshot(), remote.data || {}, shipped(), open);
         storeSnapshot(merged);
         try { await sendSaves(merged, remote.version); break; }
         catch (error) { if (error.status !== 409) throw error; }
@@ -314,10 +318,19 @@ function goHome() {
   $('startGame').disabled = next < 0;
   $('startLevel').textContent = next < 0 ? 'All levels complete' : `Level ${next + 1} of ${builtIns.length}`;
   $('skipAhead').hidden = builtIns.length <= SKIP_TO || builtIns.slice(0, SKIP_TO).every(puzzle => progress(puzzle) === 1);
+  $('bonusTip').hidden = bonus.every(puzzle => bonusSeen().includes(puzzle.id));
 }
-// Finishes levels 1-5 at once, each saved as its completed picture, for players who
+// A pop-up under Free play points at the bonus puzzles until Free play has been opened
+// with them in it, and again whenever new ones arrive. Remembered in this browser only.
+const BONUS_SEEN = 'little-jewel:bonus-seen';
+function bonusSeen() { try { return JSON.parse(localStorage.getItem(BONUS_SEEN)) || []; } catch { return []; } }
+function seeBonus() {
+  try { localStorage.setItem(BONUS_SEEN, JSON.stringify([...new Set([...bonusSeen(), ...bonus.map(puzzle => puzzle.id)])])); } catch {}
+  $('bonusTip').hidden = true;
+}
+// Finishes levels 1-10 at once, each saved as its completed picture, for players who
 // already played them elsewhere. Saved like any finished level, so it syncs too.
-const SKIP_TO = 5;
+const SKIP_TO = 10;
 $('skipAhead').onclick = () => {
   for (const puzzle of builtIns.slice(0, SKIP_TO)) {
     if (progress(puzzle) === 1) continue;
@@ -345,15 +358,21 @@ function openPuzzle(next, levelIndex = null) {
   message(`${level === null ? '' : `Level ${level + 1}: `}${art.title}. Tap a jewel group, then the shelf.`);
 }
 
-// Free play: pictures you created, and the way to make more.
+// Free play: the bonus puzzles, pictures you created, and the way to make more.
+function puzzleCard(puzzle) {
+  const done = progress(puzzle), card = document.createElement('div');
+  card.className = 'puzzle-card';
+  card.innerHTML = `<button class="puzzle-pick"><img alt="" src="${thumbnail(puzzle)}"><span class="puzzle-title">${esc(puzzle.title)}</span><span class="puzzle-progress">${done === null ? 'New' : done === 1 ? 'Complete' : `${Math.floor(done * 100)}%`}</span></button>`;
+  card.querySelector('.puzzle-pick').onclick = () => { $('modal').close(); openPuzzle(puzzle); };
+  return card;
+}
 function freePlay() {
   const mine = customPuzzles();
-  show(`<p class="eyebrow">FREE PLAY</p><h2>Your puzzles</h2>${mine.length ? '<div class="puzzle-list" id="puzzleList"></div>' : '<p>Nothing here yet. Describe a picture and it becomes a puzzle.</p>'}<button class="primary" id="createOwn">✦ Create your own</button>`);
+  show(`<p class="eyebrow">FREE PLAY</p>${bonus.length ? '<h2>Bonus</h2><div class="puzzle-list" id="bonusList"></div>' : ''}<h2>Your puzzles</h2>${mine.length ? '<div class="puzzle-list" id="puzzleList"></div>' : '<p>Nothing here yet. Describe a picture and it becomes a puzzle.</p>'}<button class="primary" id="createOwn">✦ Create your own</button>`);
+  if (bonus.length) seeBonus();
+  for (const puzzle of bonus) $('bonusList').append(puzzleCard(puzzle));
   for (const puzzle of mine) {
-    const done = progress(puzzle), card = document.createElement('div');
-    card.className = 'puzzle-card';
-    card.innerHTML = `<button class="puzzle-pick"><img alt="" src="${thumbnail(puzzle)}"><span class="puzzle-title">${esc(puzzle.title)}</span><span class="puzzle-progress">${done === null ? 'New' : done === 1 ? 'Complete' : `${Math.floor(done * 100)}%`}</span></button>`;
-    card.querySelector('.puzzle-pick').onclick = () => { $('modal').close(); openPuzzle(puzzle); };
+    const card = puzzleCard(puzzle);
     const remove = document.createElement('button');
     remove.className = 'puzzle-remove'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${puzzle.title}`);
     remove.onclick = () => {
@@ -366,8 +385,9 @@ function freePlay() {
   $('createOwn').onclick = () => { if (unlocked()) { $('modal').close(); openCreate(); } else passwordPrompt(); };
 }
 $('freePlay').onclick = freePlay;
+$('bonusTip').onclick = freePlay;
 
-// Gallery: every finished picture, levels first, then your own.
+// Gallery: every finished picture, levels first, then the bonus ones, then your own.
 function gallery() {
   const done = library().filter(puzzle => progress(puzzle) === 1);
   const name = puzzle => { const n = builtIns.indexOf(puzzle); return n < 0 ? esc(puzzle.title) : `Level ${n + 1}`; };

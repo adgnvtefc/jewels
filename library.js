@@ -1,5 +1,5 @@
-// The puzzles you can choose: the built-in set listed in assets/puzzles.json,
-// plus pictures you created, kept in this browser.
+// The puzzles you can choose: the built-in set listed in assets/puzzles.json, the bonus
+// ones in assets/bonus.json, plus pictures you created, kept in this browser.
 import { restore, correctCount } from './game.js';
 
 const CUSTOM = 'little-jewel:custom-puzzles', REMOVED = 'little-jewel:removed-puzzles';
@@ -9,8 +9,8 @@ export const saveKey = id => SAVE + id;
 const read = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
 const write = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; } };
 
-export async function builtInPuzzles() {
-  const files = await (await fetch('./assets/puzzles.json')).json();
+export async function builtInPuzzles(list = 'puzzles.json') {
+  const files = await (await fetch(`./assets/${list}`)).json();
   return Promise.all(files.map(async file => {
     const response = await fetch(`./assets/${file}`);
     if (!response.ok) throw new Error(`Missing ${file}`);

@@ -28,9 +28,9 @@ Progress saves in localStorage in the current browser and origin. Without the pa
 The game always opens on the start screen, including after a reload. It has three buttons:
 
 - **Start game** plays the levels in order: the built-in puzzles, in the order of `assets/puzzles.json`. It opens the first level not yet finished, resuming any saved progress, and the row of squares above it shows finished levels as thumbnails; unfinished ones are blank, with the next one outlined. Once every level is finished, the button is disabled.
-- **Fill and skip to level 6** marks levels 1–5 finished at once, each saved as its completed picture (it leaves any already-finished level alone), and Start game then opens level 6. It is for players who already finished those levels somewhere their progress did not follow. Finished this way, the levels count like any others: they show in the row of squares and the gallery, and sync to the server with the password. The button disappears once levels 1–5 are all finished.
-- **Free play** lists the puzzles you created, with their progress, plus **✦ Create your own**. Your puzzles show a × to remove them along with their progress. Created puzzles live in this browser's localStorage, like progress, and sync to the server with the password.
-- **Gallery** shows every finished picture, levels first and then your own. Close it with ×.
+- **Fill and skip to level 11** marks levels 1–10 finished at once, each saved as its completed picture (it leaves any already-finished level alone), and Start game then opens level 11. It is for players who already finished those levels somewhere their progress did not follow. Finished this way, the levels count like any others: they show in the row of squares and the gallery, and sync to the server with the password. The button disappears once levels 1–10 are all finished.
+- **Free play** lists the bonus puzzles, then the puzzles you created, each with its progress, plus **✦ Create your own**. The bonus puzzles (listed in `assets/bonus.json`) are hand-drawn pixel art, one for each of five drawings: ghosts, dinosaurs, crabs, chicks and cats in love. They are not levels: they stay out of Start game and its row of squares, but save, sync and show in the gallery like any other puzzle. A **Play the bonus ones here!** pop-up under Free play points at them until Free play is opened, and comes back when new bonus puzzles are added (remembered in this browser only). Your puzzles show a × to remove them along with their progress. Created puzzles live in this browser's localStorage, like progress, and sync to the server with the password.
+- **Gallery** shows every finished picture: levels first, then the bonus puzzles, then your own. Close it with ×.
 
 Finishing a puzzle shows the completed picture; closing that returns to the start screen. **☰ Menu** below the shelf also returns there, keeping your progress.
 
@@ -41,7 +41,7 @@ Finishing a puzzle shows the completed picture; closing that returns to the star
 How it works:
 
 1. The game sends the idea to the generator running on the Mac (`server/`).
-2. The generator's orchestra agent (`server/agents/artist.md`, run through orchestra in `~/projects/harness` as a library, with no tools) turns the idea into one concrete subject that can be drawn, such as "something cozy for autumn" → "a brown mug with orange steam and a cinnamon stick". If the agent fails, the idea is used as written.
+2. One model call through orchestra's `chat()` (from `~/projects/harness`, used as a library) turns the idea into one concrete subject that can be drawn, such as "something cozy for autumn" → "a brown mug with orange steam and a cinnamon stick". The model, temperature and system prompt come from `server/agents/artist.md`. orchestra records each call under the app `jewels`, with the job id in its metadata. If the call fails or the reply is cut off, the idea is used as written.
 3. Z-Image Turbo (mflux, 4-bit) paints four 512 px candidates in a flat-icon style, about 2.5 s each.
 4. The browser turns each picture into puzzle art with `convert.js`: it picks a palette in OKLab at 128 × 128, crops to the subject, shrinks to 32 × 32 by majority vote, and removes isolated pixels.
 
@@ -53,7 +53,7 @@ cd server && uv sync
 uv run server.py                     # listens on http://127.0.0.1:8787
 ```
 
-The first run downloads the 4-bit model (about 6 GB). The agent needs the oMLX server running with the model named in `server/agents/artist.md`; the generator reads `OMLX_API_KEY` from `~/projects/harness/.env` (change this with `HARNESS_ENV`). Set `USE_AGENT=0` to skip the agent.
+The first run downloads the 4-bit model (about 6 GB). The artist call needs the oMLX server running with the model named in `server/agents/artist.md`; the generator reads `OMLX_API_KEY` from `~/projects/harness/.env` (change this with `HARNESS_ENV`). Set `USE_AGENT=0` to skip it.
 
 API: `POST /api/unlock` checks the password; `POST /api/jobs` (with `Authorization: Bearer <password>`) starts a job; `GET /api/jobs/<id>` reports progress and then returns the pictures; `GET` and `PUT /api/saves` read and replace the shared saves (see below). CORS allows only the origins in `ALLOWED_ORIGINS`. After 20 wrong passwords in 10 minutes, the server refuses all password attempts for a while. It runs one job at a time and accepts at most 5 waiting jobs.
 
@@ -63,7 +63,7 @@ A page served from localhost uses `http://localhost:8787`. The published site us
 
 - **Generator:** the LaunchAgent `~/Library/LaunchAgents/com.little-jewel.generator.plist` starts `server.py` from `server/.venv` at login and restarts it if it exits. It runs under `caffeinate -i -s`, so the Mac stays awake while the generator runs. Logs go to `server/logs/launchd.log`. Restart after changing the server with `launchctl kickstart -k gui/$(id -u)/com.little-jewel.generator`, and stop it with `launchctl bootout gui/$(id -u)/com.little-jewel.generator`.
 - **Funnel:** set up once with `tailscale funnel --bg 8787` (on macOS the CLI is `/Applications/Tailscale.app/Contents/MacOS/Tailscale`). The setting persists, but it works only while the Tailscale app is running and signed in, so keep **Launch Tailscale at login** on. Check it with `tailscale funnel status`; turn it off with `tailscale funnel --https=443 off`.
-- **Agent:** the oMLX server must be running for the orchestra agent. Without it, each request falls back to the idea as written.
+- **Artist:** the oMLX server must be running for the artist call. Without it, each request falls back to the idea as written.
 
 ### Saves on the server
 
@@ -76,6 +76,12 @@ The game syncs when it loads, right after the password is accepted, a few second
 - **Two browsers at once:** each `PUT` names the version it started from. If another browser saved in between, the server answers 409 with its current copy, and the game merges again (up to three tries).
 
 A browser that has progress but has never been given the password keeps that progress to itself until someone unlocks Create your own in it; the next sync then adds it to the shared copy.
+
+**Known weaknesses** (not fixed yet):
+
+- **The puzzle on screen can roll back the server's copy.** The browser keeps its own copy of the open puzzle, and it also sends that copy to the server, even when the server's copy is further along. For example, a phone has level 11 open at 40% while level 11 is finished on a laptop; when the phone syncs, the server's level 11 drops to 40%. The laptop's next sync restores 100%, but only if its browser still has that save. The fix is to send the furthest progress to the server and keep the on-screen copy only in the browser playing it.
+- **The server keeps no backups.** Each sync replaces `server/data/saves.json` whole, and the Mac has no Time Machine. If a broken version of the game, or anyone with the password, sent an empty copy, the only other copies would be the ones in each browser. The fix is to keep recent versions (say the last 50, about 5 MB) next to the file.
+- **Size limit.** The server refuses saves over 2 MB (`MAX_SAVES_BODY`), and browsers allow about 5 MB of localStorage. The saves are about 100 KB now; the limit would be reached after roughly 200 more created puzzles.
 
 ## GitHub Pages
 

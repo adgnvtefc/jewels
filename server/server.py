@@ -1,7 +1,8 @@
 """Picture generator for Pixel Game's "Create your own" puzzles.
 
 Runs on the Mac. A small HTTP API, usable only with the password in server/.env:
-the harness agent turns an idea into one drawable subject, Z-Image Turbo paints a
+one model call through orchestra's chat() turns an idea into one drawable subject (the
+prompt is agents/artist.md), Z-Image Turbo paints a
 few candidates, and the game converts the chosen picture into a puzzle in the browser.
 
     POST /api/unlock     {"password": "..."}            -> 200 {"ok": true} or 401
@@ -35,7 +36,7 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
-# The harness, used as a library, reads its model server key from the environment.
+# orchestra (the harness repo), used as a library, reads its model server key from the environment.
 load_dotenv((ROOT / os.environ.get("HARNESS_ENV", "../../harness/.env")).resolve())
 
 PASSWORD = os.environ.get("JEWELS_PASSWORD", "")
@@ -44,6 +45,9 @@ ORIGINS = {o.strip() for o in os.environ.get(
     "ALLOWED_ORIGINS", "https://momoswebsiteofthehour.com,http://localhost:4173,http://127.0.0.1:4173").split(",") if o.strip()}
 MODEL_PATH = os.environ.get("MODEL_PATH", "filipstrand/Z-Image-Turbo-mflux-4bit")
 USE_AGENT = os.environ.get("USE_AGENT", "1") != "0"
+ARTIST = ROOT / "agents" / "artist.md"
+# The reply is one short line; the rest of the budget is for the model's thinking.
+ARTIST_MAX_TOKENS = 2048
 
 CANDIDATES = 4
 MAX_WAITING = 5
@@ -64,16 +68,29 @@ model_state = {"status": "loading", "error": None}
 failures: deque[float] = deque()
 
 
-def subject_for(idea: str) -> tuple[str, bool]:
-    """Ask the harness agent for one drawable subject; fall back to the idea itself."""
+def read_artist() -> tuple[dict, str]:
+    """agents/artist.md: `key: value` settings between '---' lines, then the system prompt."""
+    _, settings, prompt = ARTIST.read_text().split("---\n", 2)
+    pairs = (line.split(":", 1) for line in settings.splitlines() if ":" in line)
+    return {key.strip(): value.strip() for key, value in pairs}, prompt.strip()
+
+
+def subject_for(idea: str, job_id: str) -> tuple[str, bool]:
+    """Ask the artist for one drawable subject; fall back to the idea itself."""
     if not USE_AGENT:
         return idea, False
     try:
-        from orchestra.config import Project
-        from orchestra.orchestrator import new_conversation
+        from orchestra import chat
 
-        answer = new_conversation("artist", app="jewels", project=Project.at(ROOT)).turn(idea).answer
-        answer = re.sub(r"<think>.*?</think>", "", answer or "", flags=re.S).strip()
+        settings, prompt = read_artist()
+        reply = chat(app="jewels", model=settings["model"],
+                     temperature=float(settings["temperature"]) if "temperature" in settings else None,
+                     max_tokens=ARTIST_MAX_TOKENS, metadata={"job": job_id},
+                     messages=[{"role": "system", "content": prompt}, {"role": "user", "content": idea}])
+        if reply.finish_reason == "length":  # cut off: whatever came back isn't a finished subject
+            print(f"job {job_id}: the artist ran out of tokens; using the idea as written", flush=True)
+            return idea, False
+        answer = re.sub(r"<think>.*?</think>", "", reply.content or "", flags=re.S).strip()
         line = next((l.strip(" \"'`*") for l in answer.splitlines() if l.strip()), "").rstrip(".")
         if line:
             return line[:160], True
@@ -115,7 +132,7 @@ def worker() -> None:
         try:
             started = time.time()
             update(job_id, status="writing")
-            subject, from_agent = subject_for(jobs[job_id]["prompt"])
+            subject, from_agent = subject_for(jobs[job_id]["prompt"], job_id)
             prompt = f"{subject}, one subject centered, {STYLE}"
             update(job_id, status="painting", subject=subject, agent=from_agent)
             images = []

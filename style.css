@@ -105,4 +105,10 @@ body.creating .app, body.creating .home { padding-bottom: 120px; }
   .progress { grid-column: 2; grid-row: 1; align-self: end; }
   .tray { grid-column: 2; grid-row: 2; align-self: start; }
 }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
+.bonus-tip {
+  position: relative; margin: 0 0 6px; padding: 8px 16px; border-radius: 16px; background: #c47b46; color: #fff;
+  font-size: 13px; font-weight: 600; box-shadow: 0 4px 14px #c47b4640; animation: bob 1.8s ease-in-out infinite;
+}
+.bonus-tip::before { content: ''; position: absolute; left: 50%; top: -6px; margin-left: -7px; border: 7px solid transparent; border-top: 0; border-bottom-color: #c47b46; }
+@keyframes bob { 50% { transform: translateY(-3px); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } .bonus-tip { animation: none; } }

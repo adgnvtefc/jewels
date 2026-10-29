@@ -15,7 +15,7 @@ const inline = file => {
 // This catches missing-control crashes that pure puzzle tests cannot detect.
 const art = { id: 'interaction-test', width: 2, height: 2,
   colors: ['#0088ff', '#ffee00'], pixels: [0, 1, 0, 1] };
-async function mount({ location = { search: '', hostname: 'example.test' }, history = {}, wait = true, levels = 1,
+async function mount({ location = { search: '', hostname: 'example.test' }, history = {}, wait = true, levels = 1, bonus = 0,
   saved: initial = { board: [1, 0, 1, 0], shelf: Array(24).fill(-1), moves: 0 } } = {}) {
   // One save per puzzle; level 1 is `art`, and further levels are copies of it under their own ids.
   const saves = { [art.id]: initial }, saved = () => saves[art.id];
@@ -55,7 +55,8 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
     document: { getElementById: id => elements[id] ?? null, createElement: element, body: element() },
     fetch: async url => ({ ok: true, json: async () => url.endsWith('puzzles.json')
       ? Array.from({ length: levels }, (_, n) => `level-${n + 1}.json`)
-      : url.endsWith('level-1.json') ? art : { ...art, id: url.match(/(level-\d+)\.json$/)[1] } }),
+      : url.endsWith('bonus.json') ? Array.from({ length: bonus }, (_, n) => `bonus-${n + 1}.json`)
+      : url.endsWith('level-1.json') ? art : { ...art, id: url.match(/((?:level|bonus)-\d+)\.json$/)[1] } }),
     localStorage: {
       getItem: key => key.startsWith(sorting) ? (saves[key.slice(sorting.length)] ? JSON.stringify(saves[key.slice(sorting.length)]) : null) : store[key] ?? null,
       setItem: (key, value) => { if (key.startsWith(sorting)) saves[key.slice(sorting.length)] = JSON.parse(value); else store[key] = value; },
@@ -175,20 +176,41 @@ test('saves carried in the link are merged in on https, and the link is cleaned 
   assert.equal(t.elements.startGame.disabled, true, 'the level shows as complete');
 });
 
-test('Fill and skip finishes levels 1-5, opens level 6 next, and then hides itself', async () => {
-  const t = await mount({ levels: 6 });
+test('Fill and skip finishes levels 1-10, opens level 11 next, and then hides itself', async () => {
+  const t = await mount({ levels: 11 });
   assert.equal(t.elements.skipAhead.hidden, false);
-  assert.equal(t.elements.startLevel.textContent, 'Level 1 of 6');
+  assert.equal(t.elements.startLevel.textContent, 'Level 1 of 11');
   t.elements.skipAhead.onclick();
-  for (const id of ['interaction-test', 'level-2', 'level-3', 'level-4', 'level-5']) assert.deepEqual(t.saves[id].board, art.pixels, id);
-  assert.equal(t.saves['level-6'], undefined, 'level 6 is left to play');
-  assert.equal(t.elements.startLevel.textContent, 'Level 6 of 6');
+  for (const id of ['interaction-test', ...Array.from({ length: 9 }, (_, n) => `level-${n + 2}`)]) assert.deepEqual(t.saves[id].board, art.pixels, id);
+  assert.equal(t.saves['level-11'], undefined, 'level 11 is left to play');
+  assert.equal(t.elements.startLevel.textContent, 'Level 11 of 11');
   assert.equal(t.elements.skipAhead.hidden, true);
   t.elements.gallery.onclick();
-  assert.equal((t.elements.modalContent.markup.match(/gallery-item/g) || []).length, 5);
+  assert.equal((t.elements.modalContent.markup.match(/gallery-item/g) || []).length, 10);
 });
 
-test('with five levels or fewer there is nothing to skip to', async () => {
+test('with ten levels or fewer there is nothing to skip to', async () => {
   const t = await mount();
   assert.equal(t.elements.skipAhead.hidden, true);
+  assert.equal(t.elements.bonusTip.hidden, true, 'no bonus puzzles, no pop-up');
+});
+
+test('bonus puzzles live in Free play, not the levels, and the pop-up goes once Free play opens', async () => {
+  const t = await mount({ bonus: 2 });
+  assert.equal(t.elements.startLevel.textContent, 'Level 1 of 1');
+  assert.equal(t.elements.bonusTip.hidden, false);
+  t.elements.bonusTip.onclick();
+  assert.equal(t.elements.bonusList.children.length, 2);
+  assert.equal(t.elements.bonusTip.hidden, true);
+  t.elements.bonusList.children[1].querySelector('.puzzle-pick').onclick();
+  assert.equal(t.elements.game.hidden, false);
+  t.board.onpointerdown(t.pointer(1, 300, 100, 'pointerdown'));
+  t.board.onpointerup(t.pointer(1, 300, 100, 'pointerup'));
+  await t.settle();
+  t.elements.shelf.children[0].onclick();
+  await t.settle();
+  assert.equal(t.saves['bonus-2'].moves, 1, 'a bonus puzzle saves under its own id');
+  t.elements.menu.onclick();
+  assert.equal(t.elements.bonusTip.hidden, true, 'the pop-up stays gone');
+  assert.equal(t.elements.startLevel.textContent, 'Level 1 of 1');
 });
