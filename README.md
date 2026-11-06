@@ -110,7 +110,7 @@ In the repository's **Settings → Pages**, the build source must be **GitHub Ac
 
 **One address.** Browsers keep separate saves for `http://` and `https://`, so a player who switched between them would see their progress vanish. When the game loads on `http://momoswebsiteofthehour.com`, it packs that browser's guest saves into the link (`#carry=…`, compressed; the part after `#` is never sent to a server, and no sign-in is included) and moves to the `https://` address, which merges them into the guest saves there (signing in offers to add them to an account) and removes the `#carry` part from the address. Once players have visited the old address once, turning on **Enforce HTTPS** in the Pages settings is safe; turned on earlier, GitHub's redirect would skip that handoff.
 
-Open the resulting HTTPS URL in iPhone Safari. Safe-area padding and responsive layout support browser play without a native app. Add to Home Screen provides a standalone window. An initial network connection is required; offline caching is not implemented.
+Open the resulting HTTPS URL in iPhone Safari. On an iPhone or iPad that isn't already running the Home Screen version, the game suggests **Add to Home Screen** once (remembered as `little-jewel:home-screen-hint`); the Home Screen icon is `assets/apple-touch-icon.png`, the first level's art at 180 × 180. The Home Screen version keeps its own storage on iOS, so guest progress stays in Safari, and signing in brings an account's progress along. Safe-area padding and responsive layout support browser play without a native app. Add to Home Screen provides a standalone window. An initial network connection is required; offline caching is not implemented.
 
 ## Implementation and verification
 

@@ -16,7 +16,7 @@ const inline = file => {
 const art = { id: 'interaction-test', width: 2, height: 2,
   colors: ['#0088ff', '#ffee00'], pixels: [0, 1, 0, 1] };
 async function mount({ location = { search: '', hostname: 'example.test' }, history = {}, wait = true, levels = 1, bonus = 0,
-  saved: initial = { board: [1, 0, 1, 0], shelf: Array(24).fill(-1), moves: 0 }, stored = {}, server = () => [404, {}], confirm = () => true } = {}) {
+  saved: initial = { board: [1, 0, 1, 0], shelf: Array(24).fill(-1), moves: 0 }, stored = {}, server = () => [404, {}], confirm = () => true, navigator } = {}) {
   // One save per puzzle; level 1 is `art`, and further levels are copies of it under their own ids.
   const saves = { [art.id]: initial }, saved = () => saves[art.id];
   const ctx = new Proxy({}, {
@@ -54,7 +54,7 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
   })()`, {
     game, console, window: { devicePixelRatio: 1 },
     document: { getElementById: id => elements[id] ?? null, createElement: element, body: element(), visibilityState: 'visible', addEventListener() {} },
-    confirm,
+    confirm, navigator,
     fetch: async (url, options = {}) => url.includes('/api/') ? (() => {
       const path = url.slice(url.indexOf('/api/')), body = options.body ? JSON.parse(options.body) : undefined;
       calls.push({ method: options.method || 'GET', path, body });
@@ -348,4 +348,17 @@ test('signing out removes the account’s copy from this browser', async () => {
   assert.equal(t.elements.accountButton.textContent, 'Sign in');
   assert.equal(t.elements.chatButton.hidden, true);
   assert.ok(t.calls.some(c => c.path === '/api/logout'));
+});
+
+test('on an iPhone, the Add to Home Screen hint shows once, and never in the Home Screen app', async () => {
+  const iphone = { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)', standalone: false };
+  const first = await mount({ navigator: iphone });
+  assert.equal(first.elements.modal.open, true);
+  assert.match(first.elements.modalContent.markup, /Add to Home Screen/);
+  const again = await mount({ navigator: iphone, stored: { ...first.store } });
+  assert.notEqual(again.elements.modal.open, true, 'only once');
+  const app = await mount({ navigator: { ...iphone, standalone: true } });
+  assert.notEqual(app.elements.modal.open, true, 'not when already on the Home Screen');
+  const desktop = await mount({ navigator: { userAgent: 'Mozilla/5.0 (Macintosh)', platform: 'MacIntel', maxTouchPoints: 0 } });
+  assert.notEqual(desktop.elements.modal.open, true, 'not on a computer');
 });
