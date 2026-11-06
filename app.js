@@ -254,11 +254,41 @@ function tapShelf(i) {
   else if (action === 'store') move('shelf', i);
   else message('Select jewels on the board, then tap here to store them.');
 }
+// The shelf scrolls. Before jewels fly onto it, it scrolls (in SHELF_SCROLL_MS, while the
+// jewels wait to take off) to show the first slot they fill, and flights aim where slots
+// will be once it has (shelfScroll). A slot still out of view is reached at the shelf's
+// edge, where the jewel fades in or out, never in midair.
+const SHELF_SCROLL_MS = 220;
+let shelfScroll = 0, shelfWait = 0;
+function scrollShelf(shelf, to) {
+  const from = shelf.scrollTop, start = Date.now();
+  const step = () => {
+    const p = Math.min(1, (Date.now() - start) / SHELF_SCROLL_MS);
+    shelf.scrollTop = from + (to - from) * (1 - (1 - p) ** 3);
+    if (p < 1) nextFrame(step);
+  };
+  step();
+}
+function revealShelf(transfers) {
+  shelfScroll = 0; shelfWait = 0;
+  const slots = transfers.filter(t => t.to.kind === 'shelf').map(t => t.to.index);
+  if (!slots.length) return;
+  const shelf = $('shelf'), view = shelf.getBoundingClientRect();
+  const first = shelfButtons[Math.min(...slots)].getBoundingClientRect(), last = shelfButtons[Math.max(...slots)].getBoundingClientRect();
+  let top = shelf.scrollTop;
+  if (first.top < view.top + 4) top += first.top - view.top - 8;
+  else if (last.bottom > view.bottom - 4) top += Math.min(last.bottom - view.bottom + 8, first.top - view.top - 8);
+  top = Math.max(0, Math.min(top, shelf.scrollHeight - shelf.clientHeight));
+  if (Math.abs(top - shelf.scrollTop) < 1) return;
+  shelfScroll = shelf.scrollTop - top; shelfWait = SHELF_SCROLL_MS;
+  scrollShelf(shelf, top);
+}
 function screenPoint(location) {
   if (location.kind === 'shelf') {
-    const slot = shelfButtons[location.index];
-    const r = (slot.firstElementChild || slot).getBoundingClientRect();
-    return { x: r.x + r.width / 2, y: r.y + r.height / 2, size: r.width };
+    const slot = shelfButtons[location.index], view = $('shelf').getBoundingClientRect();
+    const r = (slot.firstElementChild || slot).getBoundingClientRect(), y = r.y + r.height / 2 + shelfScroll;
+    const low = view.top + r.height / 2, high = view.bottom - r.height / 2;
+    return { x: r.x + r.width / 2, y: Math.min(Math.max(y, low), high), size: r.width, hidden: y < low - 1 || y > high + 1 };
   }
   const r = canvas.getBoundingClientRect(), cell = size / art.width * zoom;
   return { x: r.x + ox + (location.index % art.width + .5) * cell, y: r.y + oy + (Math.floor(location.index / art.width) + .5) * cell, size: cell * .72 };
@@ -292,10 +322,10 @@ async function animate(transfers) {
     try {
       // fill: both keeps a jewel waiting its turn centred where it started, and a landed one in place until it is swapped.
       await el.animate([
-        { transform: 'translate(-50%,-50%) scale(1)' },
-        { transform: `translate(calc(-50% + ${(b.x-a.x)*.5}px),calc(-50% + ${(b.y-a.y)*.5-(t.from.kind==='shelf'&&t.to.kind==='shelf'?0:35)}px)) scale(1.2)`, offset: .5 },
-        { transform: `translate(calc(-50% + ${b.x-a.x}px),calc(-50% + ${b.y-a.y}px)) scale(${b.size/a.size})` }
-      ], { duration: 330, delay: Math.min(n * 13, 200), easing: 'ease-in-out', fill: 'both' }).finished;
+        { transform: 'translate(-50%,-50%) scale(1)', opacity: a.hidden ? 0 : 1 },
+        { transform: `translate(calc(-50% + ${(b.x-a.x)*.5}px),calc(-50% + ${(b.y-a.y)*.5-(t.from.kind==='shelf'&&t.to.kind==='shelf'?0:35)}px)) scale(1.2)`, opacity: 1, offset: .5 },
+        { transform: `translate(calc(-50% + ${b.x-a.x}px),calc(-50% + ${b.y-a.y}px)) scale(${b.size/a.size})`, opacity: b.hidden ? 0 : 1 }
+      ], { duration: 330, delay: shelfWait + Math.min(n * 13, 200), easing: 'ease-in-out', fill: 'both' }).finished;
       await land(`${t.to.kind}:${t.to.index}`, el);
     } catch { el.remove(); }
   }));
@@ -309,7 +339,9 @@ async function move(kind, index) {
   arrivals = new Set(motion.map(t=>`${t.to.kind}:${t.to.index}`));
   state = result.state; selection = continueSelection(art,state,selection); save(); update();
   message(`${result.transfers.length} ${result.transfers.length === 1 ? 'jewel' : 'jewels'} ${kind === 'shelf' ? 'on the shelf. Now make room for their color.' : 'back where they belong.'}`);
+  revealShelf(motion);
   try { await animate(motion); } finally {
+    shelfScroll = 0; shelfWait = 0;
     arrivals.clear(); busy = false; update();
     // Jewels past the first 64 don't fly; they sparkle as they appear.
     const flown = new Set(motion.map(t => `${t.to.kind}:${t.to.index}`));
