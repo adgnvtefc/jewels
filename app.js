@@ -230,26 +230,49 @@ function screenPoint(location) {
   const r = canvas.getBoundingClientRect(), cell = size / art.width * zoom;
   return { x: r.x + ox + (location.index % art.width + .5) * cell, y: r.y + oy + (Math.floor(location.index / art.width) + .5) * cell, size: cell * .72 };
 }
+// Each jewel reappears in its new place in the same frame its flying copy is removed,
+// as soon as that copy lands, so nothing blinks out between flight and arrival.
+const nextFrame = globalThis.requestAnimationFrame?.bind(globalThis) ?? (f => setTimeout(f, 16));
+let landing = [];
+function land(key, el) {
+  return new Promise(resolve => {
+    if (!landing.length) nextFrame(() => {
+      const batch = landing; landing = [];
+      let board = false;
+      for (const [key] of batch) {
+        arrivals.delete(key);
+        if (key.startsWith('board:')) { board = true; continue; }
+        const i = Number(key.slice(6));
+        if (state.shelf[i] >= 0 && shelfButtons[i]) shelfButtons[i].innerHTML = '<span class="shelf-jewel"></span>';
+      }
+      if (board) draw();
+      for (const [, el, done] of batch) { el.remove(); done(); }
+    });
+    landing.push([key, el, resolve]);
+  });
+}
 async function animate(transfers) {
-  if (reducedMotion) return;
-  await Promise.all(transfers.slice(0, 64).map(async (t, n) => {
+  await Promise.all(transfers.map(async (t, n) => {
     const a = screenPoint(t.from), b = screenPoint(t.to), el = document.createElement('span');
     el.className = 'flying-jewel'; el.style.cssText = `left:${a.x}px;top:${a.y}px;width:${a.size}px;height:${a.size}px;background:${art.colors[t.color]}`;
     document.body.append(el);
     try {
+      // fill: both keeps a jewel waiting its turn centred where it started, and a landed one in place until it is swapped.
       await el.animate([
-        { transform: 'translate(-50%,-50%) scale(1)', opacity: 1 },
-        { transform: `translate(calc(-50% + ${(b.x-a.x)*.5}px),calc(-50% + ${(b.y-a.y)*.5-(t.from.kind==='shelf'&&t.to.kind==='shelf'?0:35)}px)) scale(1.2)`, opacity: 1, offset: .5 },
-        { transform: `translate(calc(-50% + ${b.x-a.x}px),calc(-50% + ${b.y-a.y}px)) scale(${b.size/a.size})`, opacity: .85 }
-      ], { duration: 330, delay: Math.min(n * 13, 200), easing: 'ease-in-out' }).finished;
-    } finally { el.remove(); }
+        { transform: 'translate(-50%,-50%) scale(1)' },
+        { transform: `translate(calc(-50% + ${(b.x-a.x)*.5}px),calc(-50% + ${(b.y-a.y)*.5-(t.from.kind==='shelf'&&t.to.kind==='shelf'?0:35)}px)) scale(1.2)`, offset: .5 },
+        { transform: `translate(calc(-50% + ${b.x-a.x}px),calc(-50% + ${b.y-a.y}px)) scale(${b.size/a.size})` }
+      ], { duration: 330, delay: Math.min(n * 13, 200), easing: 'ease-in-out', fill: 'both' }).finished;
+      await land(`${t.to.kind}:${t.to.index}`, el);
+    } catch { el.remove(); }
   }));
 }
 async function move(kind, index) {
   if (selection?.kind === 'color') { message('This color is complete. Choose another color.'); return; }
   const result = transfer(art, state, selection, kind, index);
   if (result.error) { message(result.error); return; }
-  busy = true; const motion=[...result.transfers,...result.shelfShifts];
+  // Up to 64 jewels fly; any others simply appear in place.
+  busy = true; const motion=reducedMotion?[]:[...result.transfers,...result.shelfShifts].slice(0,64);
   arrivals = new Set(motion.map(t=>`${t.to.kind}:${t.to.index}`));
   state = result.state; selection = continueSelection(art,state,selection); save(); update();
   message(`${result.transfers.length} ${result.transfers.length === 1 ? 'jewel' : 'jewels'} ${kind === 'shelf' ? 'on the shelf. Now make room for their color.' : 'back where they belong.'}`);

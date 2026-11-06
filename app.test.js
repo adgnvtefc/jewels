@@ -80,7 +80,8 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
   const app = await running;
   const pointer = (id, x, y, type) => ({ pointerId: id, pointerType: 'touch', clientX: x, clientY: y, type });
   const board = elements.board;
-  const settle = async () => { await new Promise(resolve => setImmediate(resolve)); assert.equal(app.isBusy(), false); };
+  // A move ends once every flying jewel has landed, a frame after its flight.
+  const settle = async () => { await new Promise(resolve => setImmediate(resolve)); for (let i = 0; i < 100 && app.isBusy(); i++) await new Promise(resolve => setTimeout(resolve, 2)); assert.equal(app.isBusy(), false); };
   const tap = async (x, y) => {
     board.onpointerdown(pointer(1, x, y, 'pointerdown'));
     board.onpointerup(pointer(1, x, y, 'pointerup'));
