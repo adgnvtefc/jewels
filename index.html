@@ -7,6 +7,9 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Pixel Game">
+  <!-- Only this site's own scripts (plus catseye's) may run, and the page talks only to the Mac.
+       The hash is of the catseye snippet below; change both together. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-SjrW+8+i+fahnFV4JhM3J1yydGvXFL8ndYyZTR5Xc8A=' https://hanmos-mac-studio.tail6c4683.ts.net; connect-src 'self' https://hanmos-mac-studio.tail6c4683.ts.net http://localhost:* http://127.0.0.1:*; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="description" content="Sort jewel groups between the board and a temporary shelf to restore your pixel artwork.">
   <title>Pixel Game</title>
   <link rel="icon" href="assets/art.png">
@@ -14,6 +17,7 @@
 </head>
 <body>
   <main id="home" class="home" aria-label="Pixel Game">
+    <button id="accountButton" class="account-button">Sign in</button>
     <h1>Pixel Game</h1>
     <ol id="levels" class="levels" aria-label="Levels"></ol>
     <button id="startGame" class="primary start-game">Start game<span id="startLevel"></span></button>
@@ -21,6 +25,7 @@
     <button id="freePlay" class="home-button">Free play</button>
     <button id="bonusTip" class="bonus-tip" hidden>Play the bonus ones here!</button>
     <button id="gallery" class="home-button">Gallery</button>
+    <button id="chatButton" class="home-button chat-button" hidden><span id="chatLabel">Chat</span><span id="unreadBadge" class="badge" hidden></span></button>
   </main>
   <main id="game" class="app" aria-label="Pixel Game" hidden>
     <section class="board-wrap" aria-label="Puzzle">
@@ -34,6 +39,12 @@
       <p id="shelfScrollNote" class="shelf-scroll-note">* Shelf is scrollable.</p>
       <button id="menu" class="add-shelf" aria-label="Back to the start screen">☰ Menu</button>
     </section>
+  </main>
+  <main id="chat" class="chat" aria-label="Chat" hidden>
+    <header class="chat-top"><button id="chatBack" class="chat-back" aria-label="Back to the start screen">‹ Back</button><h1 id="chatTitle"></h1></header>
+    <ol id="chatMessages" class="chat-messages" aria-live="polite"></ol>
+    <p id="chatStatus" class="chat-status-line" role="status"></p>
+    <form id="chatForm" class="chat-form"><button type="button" id="chatPuzzle" class="chat-puzzle" aria-label="Send a puzzle">🧩</button><textarea id="chatText" rows="1" maxlength="1000" placeholder="Message" aria-label="Message" enterkeyhint="send"></textarea><button type="submit" id="chatSend" class="chat-send">Send</button></form>
   </main>
   <form id="create" class="create" hidden aria-label="Create your own puzzle">
     <div class="create-row">

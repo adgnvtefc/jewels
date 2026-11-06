@@ -1,23 +1,28 @@
-"""Picture generator for Pixel Game's "Create your own" puzzles.
+"""Pixel Game's server on the Mac: accounts, saves, chat, and the picture generator.
 
-Runs on the Mac. A small HTTP API, usable only with the password in server/.env:
-one model call through orchestra's chat() turns an idea into one drawable subject (the
-prompt is agents/artist.md), Z-Image Turbo paints a
-few candidates, and the game converts the chosen picture into a puzzle in the browser.
+Data lives in one SQLite file (db.py). Accounts are added on the Mac (accounts.py);
+everything but signing in and the health check needs `Authorization: Bearer <token>`.
 
-    POST /api/unlock     {"password": "..."}            -> 200 {"ok": true} or 401
-    POST /api/jobs       {"prompt": "..."}  + Bearer    -> 202 {"id": "..."}
-    GET  /api/jobs/<id>                     + Bearer    -> status, then images
-    GET  /api/saves                         + Bearer    -> {"version": n, "data": {...}}
-    PUT  /api/saves  {"version": n, "data"} + Bearer    -> {"version": n + 1}, or 409 with the current copy
-    GET  /api/health                                    -> {"model": "ready" | "loading" | "error"}
+    POST   /api/login     {name, password}               -> {token, name, friends, expires_at}, 401 or 429
+    POST   /api/logout    {everywhere?}                  -> {ok}
+    GET    /api/me                                       -> {name, friends, unread}
+    GET    /api/saves?since=<rev>                        -> saves and library rows changed since rev (saves.py)
+    PUT    /api/saves     {saves: [{puzzle, state, based_on}]}  -> {rev, results, rejected}
+    POST   /api/puzzles   {art}                          -> store a puzzle you made, or bring back one you have
+    DELETE /api/puzzles/<id>                             -> remove it from your Free play
+    GET    /api/messages?after=<id> | ?before=<id>       -> {messages, puzzles, unread, start} (chat.py)
+    POST   /api/messages  {to, text | puzzle, client_id} -> {message}
+    POST   /api/messages/read {friend, up_to}            -> {unread}
+    POST   /api/jobs      {prompt}                       -> 202 {id}
+    GET    /api/jobs/<id>                                -> status, then images
+    GET    /api/health                                   -> {model: "ready" | "loading" | "error"}
 
-Saves are one shared copy for everyone with the password; the game merges before it
-sends, and the version check stops two browsers from overwriting each other.
+Making a picture: one model call through orchestra's chat() turns an idea into one
+drawable subject (the prompt is agents/artist.md), Z-Image Turbo paints a few candidates,
+and the game converts the chosen picture into a puzzle in the browser.
 """
 
 import base64
-import hmac
 import io
 import json
 import os
@@ -31,6 +36,7 @@ import uuid
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from dotenv import load_dotenv
 
@@ -39,12 +45,17 @@ load_dotenv(ROOT / ".env")
 # orchestra (the harness repo), used as a library, reads its model server key from the environment.
 load_dotenv((ROOT / os.environ.get("HARNESS_ENV", "../../harness/.env")).resolve())
 
-PASSWORD = os.environ.get("JEWELS_PASSWORD", "")
+import accounts  # noqa: E402  (after .env, so DB_FILE can come from it)
+import chat  # noqa: E402
+import saves  # noqa: E402
+from db import Database  # noqa: E402
+
 PORT = int(os.environ.get("PORT", "8787"))
 ORIGINS = {o.strip() for o in os.environ.get(
     "ALLOWED_ORIGINS", "https://momoswebsiteofthehour.com,http://localhost:4173,http://127.0.0.1:4173").split(",") if o.strip()}
 MODEL_PATH = os.environ.get("MODEL_PATH", "filipstrand/Z-Image-Turbo-mflux-4bit")
 USE_AGENT = os.environ.get("USE_AGENT", "1") != "0"
+USE_MODEL = os.environ.get("USE_MODEL", "1") != "0"  # 0: no picture model (for tests)
 ARTIST = ROOT / "agents" / "artist.md"
 # The reply is one short line; the rest of the budget is for the model's thinking.
 ARTIST_MAX_TOKENS = 2048
@@ -52,19 +63,18 @@ ARTIST_MAX_TOKENS = 2048
 CANDIDATES = 4
 MAX_WAITING = 5
 MAX_PROMPT = 200
-MAX_BODY = 4096
+MAX_BODY = 16 * 1024
 MAX_SAVES_BODY = 2 * 1024 * 1024
 KEEP_JOBS = 30
-SAVES_FILE = Path(os.environ.get("SAVES_FILE", ROOT / "data" / "saves.json"))
 # Bold, flat, outlined icons on a plain background survive the trip down to 32x32.
 STYLE = ("flat vector icon style, bold simple shapes, thick dark outlines, at most 8 flat colors, "
          "no gradients, no text, plain solid light background")
 
+db: Database | None = None
 jobs: dict[str, dict] = {}
 waiting: queue.Queue[str] = queue.Queue()
 lock = threading.Lock()
-saves_lock = threading.Lock()
-model_state = {"status": "loading", "error": None}
+model_state = {"status": "loading" if USE_MODEL else "off", "error": None}
 failures: deque[float] = deque()
 
 
@@ -75,18 +85,18 @@ def read_artist() -> tuple[dict, str]:
     return {key.strip(): value.strip() for key, value in pairs}, prompt.strip()
 
 
-def subject_for(idea: str, job_id: str) -> tuple[str, bool]:
+def subject_for(idea: str, job_id: str, account: str) -> tuple[str, bool]:
     """Ask the artist for one drawable subject; fall back to the idea itself."""
     if not USE_AGENT:
         return idea, False
     try:
-        from orchestra import chat
+        from orchestra import chat as model_chat
 
         settings, prompt = read_artist()
-        reply = chat(app="jewels", model=settings["model"],
-                     temperature=float(settings["temperature"]) if "temperature" in settings else None,
-                     max_tokens=ARTIST_MAX_TOKENS, metadata={"job": job_id},
-                     messages=[{"role": "system", "content": prompt}, {"role": "user", "content": idea}])
+        reply = model_chat(app="jewels", model=settings["model"],
+                           temperature=float(settings["temperature"]) if "temperature" in settings else None,
+                           max_tokens=ARTIST_MAX_TOKENS, metadata={"job": job_id, "account": account},
+                           messages=[{"role": "system", "content": prompt}, {"role": "user", "content": idea}])
         if reply.finish_reason == "length":  # cut off: whatever came back isn't a finished subject
             print(f"job {job_id}: the artist ran out of tokens; using the idea as written", flush=True)
             return idea, False
@@ -132,7 +142,7 @@ def worker() -> None:
         try:
             started = time.time()
             update(job_id, status="writing")
-            subject, from_agent = subject_for(jobs[job_id]["prompt"], job_id)
+            subject, from_agent = subject_for(jobs[job_id]["prompt"], job_id, jobs[job_id]["account"])
             prompt = f"{subject}, one subject centered, {STYLE}"
             update(job_id, status="painting", subject=subject, agent=from_agent)
             images = []
@@ -142,31 +152,10 @@ def worker() -> None:
                 images.append(picture_data_url(result.image))
                 update(job_id, painted=len(images))
             update(job_id, status="done", images=images, seconds=round(time.time() - started, 1))
-            print(f"job {job_id}: {subject!r} in {time.time() - started:.1f}s (agent={from_agent})", flush=True)
+            print(f"job {job_id} ({jobs[job_id]['account']}): {subject!r} in {time.time() - started:.1f}s (agent={from_agent})", flush=True)
         except Exception as error:
             traceback.print_exc()
             update(job_id, status="error", error=str(error)[:200])
-
-
-def read_saves() -> dict:
-    try:
-        return json.loads(SAVES_FILE.read_text())
-    except FileNotFoundError:
-        return {"version": 0, "data": {"saves": {}, "custom": [], "removed": []}}
-
-
-def valid_saves(data) -> bool:
-    return (isinstance(data, dict) and isinstance(data.get("saves"), dict) and len(data["saves"]) <= 2000
-            and isinstance(data.get("custom"), list) and len(data["custom"]) <= 500
-            and isinstance(data.get("removed"), list) and len(data["removed"]) <= 5000)
-
-
-def write_saves(record: dict) -> None:
-    # Write a new file, then swap it in, so a crash never leaves half a save.
-    SAVES_FILE.parent.mkdir(exist_ok=True)
-    temporary = SAVES_FILE.with_suffix(".tmp")
-    temporary.write_text(json.dumps(record))
-    os.replace(temporary, SAVES_FILE)
 
 
 def public_view(job: dict) -> dict:
@@ -181,8 +170,16 @@ def public_view(job: dict) -> dict:
     return view
 
 
+def locked_out() -> bool:
+    # Throttle guessing: after 20 wrong passwords in 10 minutes, refuse all sign-ins for a while.
+    now = time.time()
+    while failures and failures[0] < now - 600:
+        failures.popleft()
+    return len(failures) >= 20
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LittleJewel/1"
+    server_version = "LittleJewel/2"
 
     def send(self, status: int, body: dict) -> None:
         data = json.dumps(body).encode()
@@ -203,7 +200,7 @@ class Handler(BaseHTTPRequestHandler):
         if origin in ORIGINS:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
             self.send_header("Access-Control-Max-Age", "600")
         self.end_headers()
@@ -218,69 +215,89 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return data if isinstance(data, dict) else None
 
-    def locked_out(self) -> bool:
-        # Throttle guessing: after 20 wrong passwords in 10 minutes, refuse everyone for a while.
-        now = time.time()
-        while failures and failures[0] < now - 600:
-            failures.popleft()
-        return len(failures) >= 20
-
-    def check(self, password: str) -> bool:
-        if self.locked_out():
-            self.send(429, {"error": "Too many attempts. Try again later."})
-            return False
-        if PASSWORD and hmac.compare_digest(password.encode(), PASSWORD.encode()):
-            return True
-        failures.append(time.time())
-        time.sleep(0.5)
-        self.send(401, {"error": "That password didn't work."})
-        return False
-
-    def bearer(self) -> bool:
+    def token(self) -> str:
         header = self.headers.get("Authorization", "")
-        return self.check(header[7:] if header.startswith("Bearer ") else "")
+        return header[7:] if header.startswith("Bearer ") else ""
+
+    def account(self) -> dict | None:
+        """The signed-in account, or None after answering 401."""
+        found = accounts.session_account(db, self.token())
+        if not found:
+            self.send(401, {"error": "Please sign in again."})
+        return found
+
+    def route(self) -> tuple[str, dict]:
+        parts = urlsplit(self.path)
+        return parts.path, {k: v[-1] for k, v in parse_qs(parts.query).items()}
 
     def do_GET(self) -> None:
-        if self.path == "/api/health":
+        path, query = self.route()
+        if path == "/api/health":
             return self.send(200, {"model": model_state["status"], "agent": USE_AGENT})
-        if self.path == "/api/saves":
-            if self.bearer():
-                with saves_lock:
-                    self.send(200, read_saves())
-            return
-        match = re.fullmatch(r"/api/jobs/([0-9a-f]{32})", self.path)
-        if not match:
+        match = re.fullmatch(r"/api/jobs/([0-9a-f]{32})", path)
+        if path not in ("/api/me", "/api/saves", "/api/messages") and not match:
             return self.send(404, {"error": "Not found."})
-        if not self.bearer():
+        if not (me := self.account()):
             return
+        if path == "/api/me":
+            return self.send(200, {"name": me["name"], "friends": accounts.friends_of(db, me["id"]), "unread": chat.unread(db, me["id"])})
+        try:
+            numbers = {k: int(v) for k, v in query.items() if k in ("since", "after", "before")}
+        except ValueError:
+            return self.send(400, {"error": "Bad request."})
+        if path == "/api/saves":
+            return self.send(200, saves.changes(db, me["id"], numbers.get("since", 0)))
+        if path == "/api/messages":
+            return self.send(200, chat.messages(db, me["id"], after=numbers.get("after"), before=numbers.get("before")))
         with lock:
             job = jobs.get(match[1])
-        if not job:
+        if not job or job["account"] != me["name"]:
             return self.send(404, {"error": "That request has expired. Please try again."})
         self.send(200, public_view(job))
 
     def do_POST(self) -> None:
-        if self.path not in ("/api/unlock", "/api/jobs"):
+        path, _ = self.route()
+        if path not in ("/api/login", "/api/logout", "/api/jobs", "/api/puzzles", "/api/messages", "/api/messages/read"):
             return self.send(404, {"error": "Not found."})
         data = self.body()
         if data is None:
             return self.send(400, {"error": "Bad request."})
-        if self.path == "/api/unlock":
-            if self.check(str(data.get("password", ""))):
-                self.send(200, {"ok": True})
+        if path == "/api/login":
+            return self.login(data)
+        if not (me := self.account()):
             return
-        if not self.bearer():
-            return
+        if path == "/api/logout":
+            accounts.logout(db, self.token(), everywhere=data.get("everywhere") is True)
+            return self.send(200, {"ok": True})
+        if path == "/api/puzzles":
+            return self.send(*saves.add_puzzle(db, me["id"], data.get("art")))
+        if path == "/api/messages":
+            return self.send(*chat.send(db, me["id"], data))
+        if path == "/api/messages/read":
+            return self.send(*chat.mark_read(db, me["id"], data))
+        self.start_job(data, me)
+
+    def login(self, data: dict) -> None:
+        if locked_out():
+            return self.send(429, {"error": "Too many attempts. Try again later."})
+        session = accounts.login(db, data.get("name"), data.get("password"), self.headers.get("User-Agent", ""))
+        if not session:
+            failures.append(time.time())
+            time.sleep(0.5)
+            return self.send(401, {"error": "That name and password don't match."})
+        self.send(200, session)
+
+    def start_job(self, data: dict, me: dict) -> None:
         prompt = " ".join(str(data.get("prompt", "")).split())[:MAX_PROMPT]
         if not prompt:
             return self.send(400, {"error": "Describe what you'd like to make."})
-        if model_state["status"] == "error":
-            return self.send(503, {"error": "The picture model failed to load."})
+        if model_state["status"] in ("error", "off"):
+            return self.send(503, {"error": "The picture model isn't available."})
         with lock:
             if sum(j["status"] in ("queued", "writing", "painting") for j in jobs.values()) >= MAX_WAITING:
                 return self.send(429, {"error": "Busy right now. Try again in a minute."})
             job_id = uuid.uuid4().hex
-            jobs[job_id] = {"id": job_id, "prompt": prompt, "status": "queued", "painted": 0, "created": time.time()}
+            jobs[job_id] = {"id": job_id, "prompt": prompt, "account": me["name"], "status": "queued", "painted": 0, "created": time.time()}
             for old in sorted(jobs.values(), key=lambda j: j["created"])[:-KEEP_JOBS]:
                 if old["status"] in ("done", "error"):
                     del jobs[old["id"]]
@@ -288,30 +305,42 @@ class Handler(BaseHTTPRequestHandler):
         self.send(202, {"id": job_id})
 
     def do_PUT(self) -> None:
-        if self.path != "/api/saves":
+        path, _ = self.route()
+        if path != "/api/saves":
             return self.send(404, {"error": "Not found."})
-        if not self.bearer():
+        if not (me := self.account()):
             return
         body = self.body(MAX_SAVES_BODY)
-        if body is None or not isinstance(body.get("version"), int) or not valid_saves(body.get("data")):
+        if body is None:
             return self.send(400, {"error": "Bad request."})
-        with saves_lock:
-            current = read_saves()
-            if body["version"] != current["version"]:
-                return self.send(409, {"error": "Saved elsewhere first; merge and try again.", **current})
-            write_saves({"version": current["version"] + 1, "data": body["data"]})
-            self.send(200, {"version": current["version"] + 1})
+        self.send(*saves.put_saves(db, me["id"], body.get("saves")))
+
+    def do_DELETE(self) -> None:
+        path, _ = self.route()
+        match = re.fullmatch(r"/api/puzzles/([A-Za-z0-9-]{1,64})", path)
+        if not match:
+            return self.send(404, {"error": "Not found."})
+        if not (me := self.account()):
+            return
+        if not saves.remove_puzzle(db, me["id"], match[1]):
+            return self.send(404, {"error": "Not found."})
+        self.send(200, {"ok": True})
 
     def log_message(self, format: str, *args) -> None:
         print(f"{self.address_string()} {format % args}", flush=True)
 
 
 def main() -> None:
-    if not PASSWORD:
-        raise SystemExit("Set JEWELS_PASSWORD in server/.env (see .env.example).")
-    threading.Thread(target=worker, daemon=True).start()
+    global db
+    db = Database()
+    if not db.one("SELECT 1 FROM accounts"):
+        print("No accounts yet: add them with accounts.py (see its docstring).", flush=True)
+    print(f"backed up to {db.backup()}", flush=True)
+    threading.Thread(target=db.back_up_daily, daemon=True).start()
+    if USE_MODEL:
+        threading.Thread(target=worker, daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    print(f"Pixel Game generator on http://127.0.0.1:{PORT} (agent={'on' if USE_AGENT else 'off'})", flush=True)
+    print(f"Pixel Game server on http://127.0.0.1:{PORT} (agent={'on' if USE_AGENT else 'off'}, data={db.path})", flush=True)
     server.serve_forever()
 
 

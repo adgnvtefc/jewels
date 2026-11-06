@@ -1,6 +1,9 @@
 import { createPuzzle, select, transfer, correctCount, restore, shelfAction, continueSelection, expandShelf, MAX_SHELF_SIZE, SHELF_SIZE } from './game.js';
-import { builtInPuzzles, customPuzzles, addCustom, removeCustom, progress, thumbnail, saveKey, snapshot, mergeSaves, storeSnapshot, packSaves, unpackSaves } from './library.js';
-import { unlocked, unlock, generate, pictureToArt, GeneratorError, fetchSaves, sendSaves } from './generator.js';
+import { builtInPuzzles, customPuzzles, addCustom, removeCustom, progress, thumbnail, readSave, writeSave, snapshot, mergeSaves, storeSnapshot, packSaves, unpackSaves, useProfile, withProfile, clearProfile, forget, jewelsHome, syncMeta } from './library.js';
+import { currentAccount, online, friendName, displayName, takeOldPassword, whenSignedOut, signIn, signOut, ServerError } from './account.js';
+import { generate, pictureToArt } from './generator.js';
+import { syncAccount, unsent } from './sync.js';
+import { createChat } from './chat.js';
 const $ = id => document.getElementById(id);
 // Analytics (catseye, embedded in index.html); a no-op when the embed is absent, as in tests.
 const track = (name, data) => globalThis.catseye?.(name, data);
@@ -19,12 +22,22 @@ catch { $('instruction').textContent = 'The artwork could not load. Please refre
 let bonus = [];
 try { bonus = await builtInPuzzles('bonus.json'); } catch {}
 const shipped = () => [...builtIns, ...bonus];
+// Saves carried over from the http address are a guest's; signing in offers to add them.
 if ((location.hash || '').startsWith('#carry=')) {
-  try { storeSnapshot(mergeSaves(snapshot(), await unpackSaves(location.hash.slice(7)), shipped())); } catch {}
+  try { const carried = await unpackSaves(location.hash.slice(7)); withProfile(null, () => storeSnapshot(mergeSaves(snapshot(), carried, shipped()))); } catch {}
   history.replaceState(null, '', location.pathname + location.search);
 }
+// Before accounts, everyone with the password shared one copy of the saves, now Anushka's.
+// A browser that had the password remembers which of its saves were that copy, so they
+// are offered to Anushka at sign-in but not to anyone else.
+const SHARED = 'little-jewel:shared-v91', SHARED_OWNER = 'anushka';
+if (takeOldPassword()) {
+  const old = withProfile(null, snapshot);
+  try { localStorage.setItem(SHARED, JSON.stringify({ saves: Object.fromEntries(Object.entries(old.saves).map(([id, s]) => [id, s.savedAt ?? null])), custom: old.custom.map(a => a.id) })); } catch {}
+}
+useProfile(currentAccount()?.name);
 const library = () => [...shipped(), ...customPuzzles()];
-let art, key, state, selection, total = 0, level = null;
+let art, state, selection, total = 0, level = null, returnTo = null;
 let busy = false, zoom = 1, ox = 0, oy = 0, size = 0;
 let cursor = 0, keyboard = false;
 const pointers = new Map();
@@ -36,33 +49,33 @@ let arrivals = new Set();
 
 function message(text) { $('instruction').textContent = text; }
 function save() {
-  try { localStorage.setItem(key, JSON.stringify({ board: state.board, shelf: state.shelf, moves: state.moves, selectedColor: selection?.color ?? null, savedAt: Date.now() })); }
+  try { writeSave(art.id, { board: state.board, shelf: state.shelf, moves: state.moves, selectedColor: selection?.color ?? null, savedAt: Date.now() }); }
   catch { message('Saving unavailable in this browser'); }
   syncSoon();
 }
 
-// With the password, saves also live on the server, so every browser, address and Home
-// Screen copy shows the same progress. This browser's saves stay the fallback offline.
+// Signed in, progress and puzzles also live on the server, so every browser, address and
+// Home Screen copy shows the same. This browser's copy stays the fallback offline.
+// A guest's progress stays in this browser only.
 let syncing = null, syncTimer = null;
-function syncSoon(ms = 4000) { clearTimeout(syncTimer); syncTimer = setTimeout(syncSaves, ms); }
-function syncSaves() {
-  if (!unlocked()) return Promise.resolve();
+function syncSoon(ms = 4000) { clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, ms); }
+function syncNow() {
+  if (!online()) return Promise.resolve(false);
   return syncing ??= (async () => {
     try {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const remote = await fetchSaves();
-        // The puzzle on screen keeps its own copy; the board never changes under the player.
-        const open = $('game').hidden ? new Set() : new Set([art.id]);
-        const merged = mergeSaves(snapshot(), remote.data || {}, shipped(), open);
-        storeSnapshot(merged);
-        try { await sendSaves(merged, remote.version); break; }
-        catch (error) { if (error.status !== 409) throw error; }
+      const replaced = await syncAccount();
+      // Another device got further on the puzzle on screen: pick up from there.
+      if (!$('game').hidden && replaced.includes(art.id) && !busy) {
+        openPuzzle(art, level, returnTo);
+        message('Picked up from your other device.');
       }
       if (!$('home').hidden && !$('modal').open) goHome();
-    } catch {} finally { syncing = null; }
+      chat.refresh();
+      return true;
+    } catch { return false; } finally { syncing = null; }
   })();
 }
-document.addEventListener?.('visibilitychange', () => { if (document.visibilityState === 'hidden') syncSaves(); });
+document.addEventListener?.('visibilitychange', () => { if (document.visibilityState === 'hidden') syncNow(); else syncSoon(0); });
 function syncShelfButtons() {
   while(shelfButtons.length > state.shelf.length) shelfButtons.pop().remove();
   while(shelfButtons.length < state.shelf.length) {
@@ -247,7 +260,7 @@ async function move(kind, index) {
     const heading = art.id === 'love-garden-v1' ? 'Made with love.' : esc(art.title);
     const eyebrow = level === null ? 'EVERY JEWEL, BACK HOME' : `LEVEL ${level + 1} COMPLETE`;
     // However the dialog closes, a finished puzzle returns to the start screen.
-    show(`<p class="eyebrow">${eyebrow}</p><h2>${heading}</h2><p>You restored the picture in ${state.moves} moves.</p><img src="${thumbnail(art, 8)}" alt="Your completed artwork"><button class="primary" id="keep">Back to start</button>`, goHome);
+    show(`<p class="eyebrow">${eyebrow}</p><h2>${heading}</h2><p>You restored the picture in ${state.moves} moves.</p><img src="${thumbnail(art, 8)}" alt="Your completed artwork"><button class="primary" id="keep">${returnTo === 'chat' ? 'Back to chat' : 'Back to start'}</button>`, leaveGame);
     $('keep').onclick = () => $('modal').close();
   }
 }
@@ -306,9 +319,10 @@ $('addShelf').onclick=()=>{
 };
 const esc = text => String(text).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 
-// Two screens: the start screen (home) and the board (game). Reloading always starts at home.
+// Three screens: the start screen (home), the board (game) and the chat. Reloading always starts at home.
+function showScreen(name) { for (const id of ['home', 'game', 'chat']) $(id).hidden = id !== name; }
 function goHome() {
-  $('game').hidden = true; $('home').hidden = false;
+  showScreen('home'); returnTo = null; chat.close();
   const next = nextLevel();
   $('levels').innerHTML = builtIns.map((puzzle, n) => {
     const done = progress(puzzle) === 1;
@@ -319,7 +333,24 @@ function goHome() {
   $('startLevel').textContent = next < 0 ? 'All levels complete' : `Level ${next + 1} of ${builtIns.length}`;
   $('skipAhead').hidden = builtIns.length <= SKIP_TO || builtIns.slice(0, SKIP_TO).every(puzzle => progress(puzzle) === 1);
   $('bonusTip').hidden = bonus.every(puzzle => bonusSeen().includes(puzzle.id));
+  renderAccount();
 }
+// The corner button says who is signed in; the Chat button shows unread messages.
+function renderAccount() {
+  const account = currentAccount();
+  $('accountButton').textContent = !account ? 'Sign in' : account.token ? displayName(account.name) : 'Sign in again';
+  $('accountButton').classList.toggle('needs-sign-in', Boolean(account && !account.token));
+  $('chatButton').hidden = !online() || !friendName();
+  $('chatLabel').textContent = `Chat with ${displayName(friendName())}`;
+  showUnread(chat.unread());
+}
+function showUnread(count) {
+  $('unreadBadge').hidden = !count;
+  $('unreadBadge').textContent = count > 99 ? '99+' : String(count);
+  document.title = count ? `(${count}) Pixel Game` : 'Pixel Game';
+}
+// A puzzle opened from the chat returns to the chat.
+function leaveGame() { if (returnTo === 'chat' && online()) openChat(); else goHome(); }
 // A pop-up under Free play points at the bonus puzzles until Free play has been opened
 // with them in it, and again whenever new ones arrive. Remembered in this browser only.
 const BONUS_SEEN = 'little-jewel:bonus-seen';
@@ -334,7 +365,7 @@ const SKIP_TO = 10;
 $('skipAhead').onclick = () => {
   for (const puzzle of builtIns.slice(0, SKIP_TO)) {
     if (progress(puzzle) === 1) continue;
-    try { localStorage.setItem(saveKey(puzzle.id), JSON.stringify({ board: [...puzzle.pixels], shelf: Array(SHELF_SIZE).fill(-1), moves: 0, selectedColor: null, savedAt: Date.now() })); } catch {}
+    writeSave(puzzle.id, { board: [...puzzle.pixels], shelf: Array(SHELF_SIZE).fill(-1), moves: 0, selectedColor: null, savedAt: Date.now() });
   }
   track('skip_ahead', { to: SKIP_TO + 1 });
   syncSoon(0);
@@ -343,13 +374,12 @@ $('skipAhead').onclick = () => {
 // Levels are the built-in puzzles, in order; the next one is the first not yet finished.
 const nextLevel = () => builtIns.findIndex(puzzle => progress(puzzle) !== 1);
 $('startGame').onclick = () => { const next = nextLevel(); if (next >= 0) openPuzzle(builtIns[next], next); };
-$('menu').onclick = () => { if (!busy) goHome(); };
+$('menu').onclick = () => { if (!busy) leaveGame(); };
 
-function openPuzzle(next, levelIndex = null) {
-  art = next; level = levelIndex; key = saveKey(art.id); total = art.pixels.filter(c => c >= 0).length;
-  $('home').hidden = true; $('game').hidden = false;
-  let saved;
-  try { saved = JSON.parse(localStorage.getItem(key)); } catch {}
+function openPuzzle(next, levelIndex = null, from = null) {
+  art = next; level = levelIndex; returnTo = from; total = art.pixels.filter(c => c >= 0).length;
+  showScreen('game');
+  const saved = readSave(art.id);
   state = restore(art, saved) || createPuzzle(art);
   selection = Number.isInteger(saved?.selectedColor) && saved.selectedColor >= 0 && saved.selectedColor < art.colors.length
     ? continueSelection(art,state,{kind:'color',color:saved.selectedColor,cells:[]}) : null;
@@ -358,31 +388,37 @@ function openPuzzle(next, levelIndex = null) {
   message(`${level === null ? '' : `Level ${level + 1}: `}${art.title}. Tap a jewel group, then the shelf.`);
 }
 
-// Free play: the bonus puzzles, pictures you created, and the way to make more.
-function puzzleCard(puzzle) {
+// Free play: the bonus puzzles, puzzles sent to you, pictures you created, and the way to make more.
+function puzzleCard(puzzle, onPick = () => { $('modal').close(); openPuzzle(puzzle); }) {
   const done = progress(puzzle), card = document.createElement('div');
+  const from = puzzle.from ? `from ${esc(displayName(puzzle.from))} · ` : '';
   card.className = 'puzzle-card';
-  card.innerHTML = `<button class="puzzle-pick"><img alt="" src="${thumbnail(puzzle)}"><span class="puzzle-title">${esc(puzzle.title)}</span><span class="puzzle-progress">${done === null ? 'New' : done === 1 ? 'Complete' : `${Math.floor(done * 100)}%`}</span></button>`;
-  card.querySelector('.puzzle-pick').onclick = () => { $('modal').close(); openPuzzle(puzzle); };
+  card.innerHTML = `<button class="puzzle-pick"><img alt="" src="${thumbnail(puzzle)}"><span class="puzzle-title">${esc(puzzle.title)}</span><span class="puzzle-progress">${from}${done === null ? 'New' : done === 1 ? 'Complete' : `${Math.floor(done * 100)}%`}</span></button>`;
+  card.querySelector('.puzzle-pick').onclick = onPick;
+  return card;
+}
+function removable(puzzle) {
+  const card = puzzleCard(puzzle);
+  const remove = document.createElement('button');
+  remove.className = 'puzzle-remove'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${puzzle.title}`);
+  remove.onclick = () => {
+    if (!confirm(puzzle.from ? `Remove “${puzzle.title}” and your progress on it? It stays in your chat.` : `Remove “${puzzle.title}” and its progress?`)) return;
+    removeCustom(puzzle.id); syncSoon(0); freePlay();
+  };
+  card.append(remove);
   return card;
 }
 function freePlay() {
-  const mine = customPuzzles();
-  show(`<p class="eyebrow">FREE PLAY</p>${bonus.length ? '<h2>Bonus</h2><div class="puzzle-list" id="bonusList"></div>' : ''}<h2>Your puzzles</h2>${mine.length ? '<div class="puzzle-list" id="puzzleList"></div>' : '<p>Nothing here yet. Describe a picture and it becomes a puzzle.</p>'}<button class="primary" id="createOwn">✦ Create your own</button>`);
+  const all = customPuzzles(), sent = all.filter(a => a.from), mine = all.filter(a => !a.from);
+  show(`<p class="eyebrow">FREE PLAY</p>${bonus.length ? '<h2>Bonus</h2><div class="puzzle-list" id="bonusList"></div>' : ''}${sent.length ? '<h2>Sent to you</h2><div class="puzzle-list" id="sentList"></div>' : ''}<h2>Your puzzles</h2>${mine.length ? '<div class="puzzle-list" id="puzzleList"></div>' : '<p>Nothing here yet. Describe a picture and it becomes a puzzle.</p>'}<button class="primary" id="createOwn">✦ Create your own</button>`);
   if (bonus.length) seeBonus();
   for (const puzzle of bonus) $('bonusList').append(puzzleCard(puzzle));
-  for (const puzzle of mine) {
-    const card = puzzleCard(puzzle);
-    const remove = document.createElement('button');
-    remove.className = 'puzzle-remove'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${puzzle.title}`);
-    remove.onclick = () => {
-      if (!confirm(`Remove “${puzzle.title}” and its progress?`)) return;
-      removeCustom(puzzle.id); freePlay();
-    };
-    card.append(remove);
-    $('puzzleList').append(card);
-  }
-  $('createOwn').onclick = () => { if (unlocked()) { $('modal').close(); openCreate(); } else passwordPrompt(); };
+  for (const puzzle of sent) $('sentList').append(removable(puzzle));
+  for (const puzzle of mine) $('puzzleList').append(removable(puzzle));
+  $('createOwn').onclick = () => {
+    if (online()) { $('modal').close(); openCreate(); }
+    else signInPrompt({ note: 'Creating puzzles needs an account.', then: openCreate });
+  };
 }
 $('freePlay').onclick = freePlay;
 $('bonusTip').onclick = freePlay;
@@ -397,16 +433,137 @@ function gallery() {
 }
 $('gallery').onclick = gallery;
 
-function passwordPrompt(note = '') {
-  show(`<p class="eyebrow">CREATE YOUR OWN</p><h2>Password</h2><p id="unlockNote">${esc(note || 'Making new puzzles needs the password.')}</p><form id="unlockForm" class="unlock"><input id="password" type="password" autocomplete="current-password" aria-label="Password" required><button class="primary" type="submit">Unlock</button></form>`);
-  $('password').focus();
-  $('unlockForm').onsubmit = async e => {
+// A yes/no question in the dialog; resolves true for yes.
+function ask(question, yes, no) {
+  let answer = false;
+  return new Promise(resolve => {
+    show(`<h2>${esc(question)}</h2><button class="primary" id="askYes">${esc(yes)}</button><button class="home-button" id="askNo">${esc(no)}</button>`, () => resolve(answer));
+    $('askYes').onclick = () => { answer = true; $('modal').close(); };
+    $('askNo').onclick = () => $('modal').close();
+  });
+}
+
+// Accounts are invite-only and added on the Mac. A sign-in that ran out keeps the name
+// (and this browser's copy of that account's progress) and asks only for the password.
+function signInPrompt({ note = '', then = null } = {}) {
+  const again = currentAccount();
+  show(`<p class="eyebrow">${again ? 'SIGN IN AGAIN' : 'SIGN IN'}</p><h2>${again ? esc(displayName(again.name)) : 'Welcome back'}</h2><p id="signInNote">${esc(note || (again ? 'Please sign in again. Your progress here is safe.' : 'Accounts are invite-only for now.'))}</p><form id="signInForm" class="unlock sign-in"><input id="signInName" autocomplete="username" autocapitalize="none" spellcheck="false" aria-label="Name" placeholder="Name" required value="${again ? esc(again.name) : ''}"${again ? ' readonly' : ''}><input id="password" type="password" autocomplete="current-password" aria-label="Password" placeholder="Password" required><button class="primary" type="submit">Sign in</button></form>${again ? '<button class="home-button" id="forgetAccount">Sign out instead</button>' : ''}`);
+  (again ? $('password') : $('signInName')).focus();
+  if (again) $('forgetAccount').onclick = () => signOutFlow(false);
+  $('signInForm').onsubmit = async e => {
     e.preventDefault();
     const button = e.target.querySelector('button'); button.disabled = true;
-    try { await unlock($('password').value); track('login', { ok: true }); syncSaves(); $('modal').close(); openCreate(); }
-    catch (error) { track('login', { ok: false, error: error.message, status: error.status }); $('unlockNote').textContent = error.message; button.disabled = false; $('password').select(); }
+    try {
+      await signIn($('signInName').value, $('password').value);
+      track('login', { ok: true });
+    } catch (error) {
+      track('login', { ok: false, status: error.status });
+      $('signInNote').textContent = error.message; button.disabled = false; $('password').select();
+      return;
+    }
+    await startAccount();
+    if ($('modal').open) $('modal').close();
+    goHome();
+    then?.();
   };
 }
+async function startAccount() {
+  useProfile(currentAccount().name);
+  chat.reset();
+  await syncNow();
+  await offerGuestProgress();
+}
+// This browser's guest progress can move into the account, once, if the player says so.
+// The old shared copy (see SHARED) is offered only to its owner.
+async function offerGuestProgress() {
+  const name = currentAccount()?.name, guest = withProfile(null, snapshot);
+  let shared = null;
+  try { shared = name === SHARED_OWNER ? null : JSON.parse(localStorage.getItem(SHARED)); } catch {}
+  const old = (id, save) => Boolean(shared?.saves && id in shared.saves && shared.saves[id] === (save.savedAt ?? null));
+  const saves = Object.entries(guest.saves).filter(([id, save]) => !old(id, save));
+  const custom = guest.custom.filter(a => !shared?.custom?.includes(a.id));
+  const ids = [...new Set([...saves.map(([id]) => id), ...custom.map(a => a.id)])];
+  if (!ids.length) return;
+  if (!await ask(`Add this browser’s progress (${ids.length} puzzle${ids.length === 1 ? '' : 's'}) to ${displayName(name)}?`, 'Add it', 'Not now')) return;
+  for (const puzzle of custom) if (!customPuzzles().some(a => a.id === puzzle.id)) addCustom(puzzle);
+  const arts = new Map([...shipped(), ...customPuzzles()].map(a => [a.id, a]));
+  for (const [id, save] of saves) {
+    const mine = readSave(id);
+    if (!mine || jewelsHome(arts.get(id), save) > jewelsHome(arts.get(id), mine)) writeSave(id, save);
+  }
+  withProfile(null, () => forget(ids));
+  if (name === SHARED_OWNER) try { localStorage.removeItem(SHARED); } catch {}
+  track('guest_progress_added', { puzzles: ids.length });
+  await syncNow();
+}
+
+function accountMenu() {
+  const account = currentAccount();
+  if (!account?.token) return signInPrompt();
+  show(`<p class="eyebrow">SIGNED IN</p><h2>${esc(displayName(account.name))}</h2><p>${unsent() ? 'Some progress is still on its way to the server.' : 'Your progress is saved on the server.'}</p><button class="home-button" id="signOutHere">Sign out</button><button class="home-button" id="signOutAll">Sign out everywhere</button>`);
+  $('signOutHere').onclick = () => signOutFlow(false);
+  $('signOutAll').onclick = () => signOutFlow(true);
+}
+// Signing out sends what it can, then removes the account's copy from this browser.
+async function signOutFlow(everywhere) {
+  const account = currentAccount();
+  if (!account) return;
+  if (online()) await syncNow();
+  if (unsent() && !confirm('Some progress hasn’t reached the server yet. Sign out and remove it from this browser anyway?')) return;
+  await signOut(everywhere);
+  chat.stop();
+  clearProfile(account.name);
+  useProfile(null);
+  track('logout', { everywhere });
+  if ($('modal').open) $('modal').close();
+  goHome();
+}
+$('accountButton').onclick = accountMenu;
+
+// The chat with your friend, on its own screen.
+function openChat() {
+  if (!online()) return goHome();
+  showScreen('chat'); returnTo = null;
+  $('chatStatus').textContent = '';
+  chat.open();
+}
+$('chatButton').onclick = openChat;
+$('chatBack').onclick = goHome;
+// A puzzle tapped in the chat opens; one removed from Free play comes back first.
+function openFromChat(puzzle, maker) {
+  let known = library().find(a => a.id === puzzle.id);
+  if (!known) {
+    known = maker && maker !== currentAccount()?.name ? { ...puzzle, from: maker } : { ...puzzle };
+    addCustom(known); syncSoon(0);
+  }
+  chat.close();
+  openPuzzle(known, builtIns.includes(known) ? builtIns.indexOf(known) : null, 'chat');
+}
+// Only puzzles you made can be sent. The server needs the puzzle before the message.
+async function sendPuzzle(puzzle, note = text => { $('chatStatus').textContent = text; }) {
+  if (syncMeta().uploads.includes(puzzle.id)) await syncNow();
+  if (syncMeta().uploads.includes(puzzle.id)) { note('Couldn’t reach the server. Try again in a moment.'); return false; }
+  track('puzzle_sent', { puzzle: puzzle.id });
+  await chat.sendPuzzle(puzzle.id);
+  return true;
+}
+$('chatPuzzle').onclick = () => {
+  const mine = customPuzzles().filter(a => !a.from);
+  show(`<p class="eyebrow">SEND A PUZZLE</p><h2>Your puzzles</h2>${mine.length ? '<div class="puzzle-list" id="pickList"></div>' : '<p>Make a puzzle in Free play first, then send it here.</p>'}`);
+  for (const puzzle of mine) $('pickList').append(puzzleCard(puzzle, () => { $('modal').close(); sendPuzzle(puzzle); }));
+};
+const chat = createChat({
+  $, thumbnail, progress,
+  findArt: id => library().find(a => a.id === id),
+  openArt: openFromChat,
+  onUnread: showUnread,
+  onPuzzleNews: () => syncSoon(0),
+  say: text => { $('chatStatus').textContent = text; },
+});
+// The server stopped accepting this browser's sign-in: keep everything, and ask again.
+whenSignedOut(() => { chat.stop(); if (!$('chat').hidden) goHome(); else renderAccount(); });
+// On phones, keep the message box above the on-screen keyboard.
+window.visualViewport?.addEventListener('resize', () => document.documentElement?.style.setProperty('--viewport-height', `${window.visualViewport.height}px`));
 
 // The create bar sits at the bottom of the screen; results come back as candidates to pick from.
 let creating = false;
@@ -435,7 +592,7 @@ $('create').onsubmit = async e => {
     status(''); pickCandidate(prompt, choices);
   } catch (error) {
     track('llm_generate', { ok: false, prompt, error: error.message, status: error.status, ms: Date.now() - started });
-    if (error instanceof GeneratorError && error.status === 401) { $('createClose').onclick(); passwordPrompt('Please enter the password again.'); }
+    if (error instanceof ServerError && error.status === 401) { $('createClose').onclick(); signInPrompt({ note: 'Please sign in again.', then: openCreate }); }
     else status(error.message || 'Something went wrong.');
   } finally { creating = false; $('createGo').disabled = false; }
 };
@@ -450,13 +607,27 @@ function pickCandidate(prompt, choices) {
       const puzzle = { ...choice, id: `custom-${Date.now().toString(36)}` };
       if (!addCustom(puzzle)) { status('This browser could not save the puzzle.'); return; }
       track('llm_pick', { prompt, option: n + 1, colors: choice.colors.length });
-      $('modal').close(); $('createClose').onclick(); $('prompt').value = '';
-      openPuzzle(puzzle);
+      $('createClose').onclick(); $('prompt').value = '';
+      syncSoon(0);
+      madeIt(puzzle);
     };
     $('candidates').append(button);
   });
   $('again').onclick = () => { $('modal').close(); $('create').requestSubmit(); };
 }
+// The new puzzle: play it now, or send it to your friend.
+function madeIt(puzzle) {
+  const friend = friendName();
+  show(`<p class="eyebrow">YOUR NEW PUZZLE</p><h2>${esc(puzzle.title)}</h2><img src="${thumbnail(puzzle, 8)}" alt="Your new puzzle"><button class="primary" id="playMade">Play it</button>${friend ? `<button class="home-button" id="sendMade">Send to ${esc(displayName(friend))}</button><p id="sendNote" role="status"></p>` : ''}`);
+  $('playMade').onclick = () => { $('modal').close(); openPuzzle(puzzle); };
+  if (friend) $('sendMade').onclick = async () => {
+    $('sendMade').disabled = true; $('sendNote').textContent = 'Sending…';
+    const sent = await sendPuzzle(puzzle, text => { $('sendNote').textContent = text; });
+    if (sent) $('sendNote').textContent = `Sent! It’s in your chat with ${displayName(friend)}.`;
+    else $('sendMade').disabled = false;
+  };
+}
 
+if (online()) chat.reset();
 goHome();
-syncSaves();
+syncNow();

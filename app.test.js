@@ -16,7 +16,7 @@ const inline = file => {
 const art = { id: 'interaction-test', width: 2, height: 2,
   colors: ['#0088ff', '#ffee00'], pixels: [0, 1, 0, 1] };
 async function mount({ location = { search: '', hostname: 'example.test' }, history = {}, wait = true, levels = 1, bonus = 0,
-  saved: initial = { board: [1, 0, 1, 0], shelf: Array(24).fill(-1), moves: 0 } } = {}) {
+  saved: initial = { board: [1, 0, 1, 0], shelf: Array(24).fill(-1), moves: 0 }, stored = {}, server = () => [404, {}], confirm = () => true } = {}) {
   // One save per puzzle; level 1 is `art`, and further levels are copies of it under their own ids.
   const saves = { [art.id]: initial }, saved = () => saves[art.id];
   const ctx = new Proxy({}, {
@@ -30,6 +30,7 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
     children: [], style: { setProperty() {} }, classList: { toggle() {} },
     setAttribute() {}, setPointerCapture() {}, addEventListener() {}, focus() {}, select() {},
     querySelector(selector) { return (this.found ??= {})[selector] ??= element(); },
+    replaceChildren(...children) { this.children = children; },
     toDataURL: () => 'data:image/png;base64,',
     append(child) { this.children.push(child); }, remove() {},
     getBoundingClientRect: () => ({ x: 0, y: 0, left: 0, top: 0, width: 400, height: 400 }),
@@ -44,23 +45,31 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
   const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
   elements = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(([, id]) => [id, element()]));
   const source = `const {${Object.keys(game)}} = game;\n`
-    + ['./convert.js', './library.js', './generator.js'].map(inline).join('\n')
+    + ['./convert.js', './account.js', './library.js', './generator.js', './sync.js', './chat.js'].map(inline).join('\n')
     + readFileSync(new URL('./app.js', import.meta.url), 'utf8').replace(/^import .*$/gm, '');
-  const store = {}, sorting = 'little-jewel:sorting-v2:';
+  const store = { ...stored }, sorting = 'little-jewel:sorting-v2:', calls = [];
   const running = runInNewContext(`(async () => {
     ${source}
     return { view: () => ({zoom, ox, oy}), isBusy: () => busy };
   })()`, {
     game, console, window: { devicePixelRatio: 1 },
-    document: { getElementById: id => elements[id] ?? null, createElement: element, body: element() },
-    fetch: async url => ({ ok: true, json: async () => url.endsWith('puzzles.json')
+    document: { getElementById: id => elements[id] ?? null, createElement: element, body: element(), visibilityState: 'visible', addEventListener() {} },
+    confirm,
+    fetch: async (url, options = {}) => url.includes('/api/') ? (() => {
+      const path = url.slice(url.indexOf('/api/')), body = options.body ? JSON.parse(options.body) : undefined;
+      calls.push({ method: options.method || 'GET', path, body });
+      const [status, reply] = server(options.method || 'GET', path, body);
+      return { ok: status < 400, status, json: async () => reply };
+    })() : ({ ok: true, json: async () => url.endsWith('puzzles.json')
       ? Array.from({ length: levels }, (_, n) => `level-${n + 1}.json`)
       : url.endsWith('bonus.json') ? Array.from({ length: bonus }, (_, n) => `bonus-${n + 1}.json`)
       : url.endsWith('level-1.json') ? art : { ...art, id: url.match(/((?:level|bonus)-\d+)\.json$/)[1] } }),
     localStorage: {
       getItem: key => key.startsWith(sorting) ? (saves[key.slice(sorting.length)] ? JSON.stringify(saves[key.slice(sorting.length)]) : null) : store[key] ?? null,
       setItem: (key, value) => { if (key.startsWith(sorting)) saves[key.slice(sorting.length)] = JSON.parse(value); else store[key] = value; },
-      removeItem: key => { delete store[key]; delete saves[key.slice(sorting.length)]; },
+      removeItem: key => { if (key.startsWith(sorting)) delete saves[key.slice(sorting.length)]; else delete store[key]; },
+      get length() { return Object.keys(store).length + Object.keys(saves).length; },
+      key: i => [...Object.keys(store), ...Object.keys(saves).map(id => sorting + id)][i] ?? null,
     },
     location, history, URLSearchParams, TextEncoder, TextDecoder, Blob, Response, CompressionStream, DecompressionStream, btoa, atob,
     setTimeout: (f, ms) => setTimeout(f, ms).unref(), clearTimeout,
@@ -77,7 +86,7 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
     board.onpointerup(pointer(1, x, y, 'pointerup'));
     await settle();
   };
-  return { app, elements, board, pointer, tap, settle, saved, saves, store };
+  return { app, elements, board, pointer, tap, settle, saved, saves, store, calls };
 }
 
 test('minimal UI loads and transfers board → shelf → board without camera jumps', async () => {
@@ -145,7 +154,10 @@ test('the start screen offers levels, free play and the gallery; Menu returns to
   t.elements.freePlay.onclick();
   assert.equal(t.elements.modal.open, true);
   t.elements.createOwn.onclick();
-  assert.ok(t.elements.unlockForm, 'without a saved password, the password form opens');
+  assert.ok(t.elements.signInForm, 'a guest is asked to sign in');
+  assert.match(t.elements.modalContent.markup, /Creating puzzles needs an account/);
+  assert.equal(t.elements.chatButton.hidden, true, 'no chat for a guest');
+  assert.equal(t.calls.length, 0, 'a guest never talks to the server');
   t.elements.modal.close();
   t.elements.startGame.onclick();
   assert.equal(t.elements.game.hidden, false);
@@ -213,4 +225,120 @@ test('bonus puzzles live in Free play, not the levels, and the pop-up goes once 
   t.elements.menu.onclick();
   assert.equal(t.elements.bonusTip.hidden, true, 'the pop-up stays gone');
   assert.equal(t.elements.startLevel.textContent, 'Level 1 of 1');
+});
+
+// A signed-in browser: hanmo, friends with anushka, talking to a fake server.
+const tick = (ms = 15) => new Promise(resolve => setTimeout(resolve, ms));
+const sent = { id: 'custom-sent1', title: 'From <b>her</b>', width: 2, height: 2, colors: ['#0088ff', '#ffee00'], pixels: [0, 1, 0, 1] };
+const signedIn = { 'little-jewel:account': JSON.stringify({ name: 'hanmo', token: 'tok', friends: ['anushka'] }) };
+function fakeServer({ messages = [], library = [], unread = 0 } = {}) {
+  return (method, path, body) => {
+    if (path.startsWith('/api/saves') && method === 'GET') return [200, { rev: 5, saves: [], library }];
+    if (path === '/api/saves') return [200, { rev: 6, results: Object.fromEntries(body.saves.map(s => [s.puzzle, { rev: 6 }])), rejected: [] }];
+    if (path.startsWith('/api/messages?') || path === '/api/messages') return method === 'GET'
+      ? [200, { messages, puzzles: { [sent.id]: sent }, unread, start: true }]
+      : [201, { message: { id: 99, from: 'hanmo', to: 'anushka', kind: body.text ? 'text' : 'puzzle', text: body.text, puzzle: body.puzzle, client_id: body.client_id, at: 1 } }];
+    if (path === '/api/messages/read') return [200, { unread: 0 }];
+    if (path === '/api/logout') return [200, { ok: true }];
+    return [404, {}];
+  };
+}
+
+test('signed in: the corner shows the name, progress is the account’s own, and it syncs', async () => {
+  const t = await mount({ stored: signedIn, server: fakeServer({ unread: 2 }) });
+  await tick();
+  assert.equal(t.elements.accountButton.textContent, 'Hanmo');
+  assert.equal(t.elements.chatButton.hidden, false);
+  assert.equal(t.elements.chatLabel.textContent, 'Chat with Anushka');
+  assert.equal(t.elements.unreadBadge.textContent, '2');
+  t.elements.startGame.onclick();
+  await t.tap(300, 100);
+  t.elements.shelf.children[0].onclick();
+  await t.settle();
+  assert.equal(t.saves['interaction-test'].moves, 0, 'the guest save is untouched');
+  assert.equal(JSON.parse(t.store['little-jewel:hanmo:sorting-v2:interaction-test']).moves, 1);
+  assert.deepEqual(JSON.parse(t.store['little-jewel:hanmo:sync']).dirty, ['interaction-test'], 'noted for the next sync');
+});
+
+test('chat shows messages as text, never HTML, and a sent puzzle opens on tap; Menu returns to the chat', async () => {
+  const attack = '<img src=x onerror=alert(1)>';
+  const t = await mount({ stored: signedIn, server: fakeServer({
+    library: [{ puzzle: sent.id, art: sent, from: 'anushka', rev: 3, removed: false }],
+    messages: [{ id: 1, from: 'anushka', to: 'hanmo', kind: 'text', text: attack, client_id: 'a', at: 1 },
+      { id: 2, from: 'anushka', to: 'hanmo', kind: 'puzzle', puzzle: sent.id, client_id: 'b', at: 2 }] }) });
+  await tick();
+  t.elements.chatButton.onclick();
+  await tick();
+  assert.equal(t.elements.chat.hidden, false);
+  const items = t.elements.chatMessages.children;
+  const text = items.flatMap(li => li.children).find(child => child.className === 'chat-text');
+  assert.equal(text.textContent, attack);
+  assert.equal(items.some(li => JSON.stringify(li).includes('markup')), false, 'nothing in the chat is built from HTML');
+  const card = items.flatMap(li => li.children).find(child => child.className === 'chat-card');
+  assert.equal(card.children[1].children[1].textContent, 'from Anushka · Not started');
+  card.onclick();
+  assert.equal(t.elements.game.hidden, false);
+  t.elements.menu.onclick();
+  assert.equal(t.elements.chat.hidden, false, 'back to the chat');
+  assert.ok(t.calls.some(c => c.path === '/api/messages/read' && c.body.up_to === 2), 'read up to the newest');
+  t.elements.chatText.value = 'hello';
+  t.elements.chatForm.onsubmit({ preventDefault() {} });
+  await tick();
+  assert.equal(t.calls.find(c => c.method === 'POST' && c.path === '/api/messages').body.text, 'hello');
+});
+
+test('puzzles sent to you show in Free play, and only your own can be picked to send', async () => {
+  const mine = { ...sent, id: 'custom-mine1', title: 'Mine' };
+  const t = await mount({ stored: { ...signedIn, 'little-jewel:hanmo:custom-puzzles': JSON.stringify([mine]) },
+    server: fakeServer({ library: [{ puzzle: sent.id, art: sent, from: 'anushka', rev: 3, removed: false }] }) });
+  await tick();
+  t.elements.freePlay.onclick();
+  assert.equal(t.elements.sentList.children.length, 1);
+  assert.match(t.elements.sentList.children[0].markup, /from Anushka/);
+  assert.match(t.elements.sentList.children[0].markup, /From &#60;b&#62;her/, 'titles are escaped');
+  assert.equal(t.elements.puzzleList.children.length, 1);
+  t.elements.chatButton.onclick();
+  t.elements.chatPuzzle.onclick();
+  assert.equal(t.elements.pickList.children.length, 1, 'only the puzzle you made');
+});
+
+test('signing in offers this browser’s guest progress, and moves it once', async () => {
+  const solved = { board: [0, 1, 0, 1], shelf: Array(24).fill(-1), moves: 4, savedAt: 1 };
+  const t = await mount({ saved: solved, server: (method, path, body) => path === '/api/login'
+    ? [200, { name: 'anushka', token: 'tok', friends: ['hanmo'] }] : fakeServer()(method, path, body) });
+  t.elements.accountButton.onclick();
+  t.elements.signInName.value = 'anushka'; t.elements.password.value = 'pw';
+  const done = t.elements.signInForm.onsubmit({ preventDefault() {}, target: t.elements.signInForm });
+  await tick();
+  assert.match(t.elements.modalContent.markup, /Add this browser’s progress \(1 puzzle\) to Anushka\?/);
+  t.elements.askYes.onclick(); t.elements.modal.onclose();
+  await done;
+  assert.equal(t.saves['interaction-test'], undefined, 'the guest copy is gone');
+  assert.equal(JSON.parse(t.store['little-jewel:anushka:sorting-v2:interaction-test']).moves, 4);
+  assert.ok(t.calls.some(c => c.method === 'PUT' && c.body.saves[0].puzzle === 'interaction-test'), 'and sent to the server');
+  assert.equal(t.elements.accountButton.textContent, 'Anushka');
+});
+
+test('the old shared password is forgotten, and its saves are not offered to anyone but Anushka', async () => {
+  const solved = { board: [0, 1, 0, 1], shelf: Array(24).fill(-1), moves: 4, savedAt: 7 };
+  const t = await mount({ saved: solved, stored: { 'little-jewel:generator-password': 'old' }, server: (method, path, body) => path === '/api/login'
+    ? [200, { name: 'hanmo', token: 'tok', friends: ['anushka'] }] : fakeServer()(method, path, body) });
+  assert.equal(t.store['little-jewel:generator-password'], undefined);
+  t.elements.accountButton.onclick();
+  t.elements.signInName.value = 'hanmo'; t.elements.password.value = 'pw';
+  await t.elements.signInForm.onsubmit({ preventDefault() {}, target: t.elements.signInForm });
+  assert.doesNotMatch(t.elements.modalContent.markup || '', /Add this browser/);
+  assert.equal(t.saves['interaction-test'].moves, 4, 'still there as guest progress');
+  assert.equal(t.store['little-jewel:hanmo:sorting-v2:interaction-test'], undefined);
+});
+
+test('signing out removes the account’s copy from this browser', async () => {
+  const t = await mount({ stored: { ...signedIn, 'little-jewel:hanmo:sorting-v2:interaction-test': '{}' }, server: fakeServer() });
+  await tick();
+  t.elements.accountButton.onclick();
+  await t.elements.signOutHere.onclick();
+  assert.equal(t.store['little-jewel:account'], undefined);
+  assert.equal(t.elements.accountButton.textContent, 'Sign in');
+  assert.equal(t.elements.chatButton.hidden, true);
+  assert.ok(t.calls.some(c => c.path === '/api/logout'));
 });

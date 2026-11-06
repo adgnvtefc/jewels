@@ -1,49 +1,116 @@
 // The puzzles you can choose: the built-in set listed in assets/puzzles.json, the bonus
-// ones in assets/bonus.json, plus pictures you created, kept in this browser.
+// ones in assets/bonus.json, plus pictures you made or were sent, kept in this browser.
+//
+// Progress is kept per profile: a guest's under `little-jewel:…` (the keys used before
+// accounts), a signed-in account's under `little-jewel:<name>:…`. For an account, every
+// change is also noted for the next sync with the server (sync.js).
 import { restore, correctCount } from './game.js';
 
-const CUSTOM = 'little-jewel:custom-puzzles', REMOVED = 'little-jewel:removed-puzzles';
-const SAVE = 'little-jewel:sorting-v2:';
-export const saveKey = id => SAVE + id;
+const ROOT = 'little-jewel:';
+let prefix = ROOT, profileName = null;
+const keys = () => ({ save: `${prefix}sorting-v2:`, custom: `${prefix}custom-puzzles`, removed: `${prefix}removed-puzzles`, sync: `${prefix}sync` });
+export const saveKey = id => keys().save + id;
+export const profile = () => profileName;
+export function useProfile(name) { profileName = name || null; prefix = name ? `${ROOT}${name}:` : ROOT; }
+export function withProfile(name, work) {
+  const before = profileName;
+  useProfile(name);
+  try { return work(); } finally { useProfile(before); }
+}
 
 const read = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
 const write = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); return true; } catch { return false; } };
+const drop = key => { try { localStorage.removeItem(key); } catch {} };
+const list = value => Array.isArray(value) ? value : [];
+const without = (items, item) => list(items).filter(x => x !== item);
+const storageKeys = () => { const found = []; try { for (let i = 0; i < localStorage.length; i++) found.push(localStorage.key(i)); } catch {} return found; };
 
-export async function builtInPuzzles(list = 'puzzles.json') {
-  const files = await (await fetch(`./assets/${list}`)).json();
-  return Promise.all(files.map(async file => {
-    const response = await fetch(`./assets/${file}`);
-    if (!response.ok) throw new Error(`Missing ${file}`);
+export async function builtInPuzzles(file = 'puzzles.json') {
+  const files = await (await fetch(`./assets/${file}`)).json();
+  return Promise.all(files.map(async name => {
+    const response = await fetch(`./assets/${name}`);
+    if (!response.ok) throw new Error(`Missing ${name}`);
     return response.json();
   }));
 }
 
+// What still has to reach the server for the signed-in account: changed saves, puzzles
+// made (or brought back) here, and removals; plus the server revisions last seen.
+export function syncMeta() {
+  const meta = read(keys().sync, {});
+  return { since: Number.isInteger(meta.since) ? meta.since : 0, revs: meta.revs && typeof meta.revs === 'object' ? meta.revs : {},
+    dirty: list(meta.dirty), uploads: list(meta.uploads), removals: list(meta.removals) };
+}
+export const setSyncMeta = meta => write(keys().sync, meta);
+const note = (field, id, add = true) => {
+  if (!profileName) return;
+  const meta = syncMeta();
+  meta[field] = add ? [...without(meta[field], id), id] : without(meta[field], id);
+  setSyncMeta(meta);
+};
+
+export const readSave = id => read(saveKey(id), null);
+// `changed` is false for copies that came from the server, which needn't go back.
+export function writeSave(id, save, changed = true) {
+  const ok = write(saveKey(id), save);
+  if (ok && changed) note('dirty', id);
+  return ok;
+}
+
 const isArt = a => a && typeof a.id === 'string' && Array.isArray(a.pixels) && Array.isArray(a.colors);
-const list = value => Array.isArray(value) ? value : [];
-export const customPuzzles = () => list(read(CUSTOM, [])).filter(isArt);
-export function addCustom(art) { return write(CUSTOM, [art, ...customPuzzles()]); }
+export const customPuzzles = () => list(read(keys().custom, [])).filter(isArt);
+// A puzzle made here, or one brought back to Free play: added, and sent to the server.
+export function addCustom(art) {
+  const ok = write(keys().custom, [art, ...customPuzzles().filter(a => a.id !== art.id)]);
+  if (ok) { write(keys().removed, without(read(keys().removed, []), art.id)); note('uploads', art.id); note('removals', art.id, false); }
+  return ok;
+}
+// A puzzle the server says this account has (made, or sent by a friend): stored as it is.
+export function storeCustom(art) {
+  const mine = customPuzzles(), at = mine.findIndex(a => a.id === art.id);
+  write(keys().custom, at < 0 ? [art, ...mine] : mine.map(a => a.id === art.id ? art : a));
+  write(keys().removed, without(read(keys().removed, []), art.id));
+}
 // Removals are remembered, so a copy of the saves made elsewhere cannot bring a puzzle back.
-export function removeCustom(id) {
-  write(CUSTOM, customPuzzles().filter(a => a.id !== id));
-  write(REMOVED, [...new Set([...list(read(REMOVED, [])), id])]);
-  try { localStorage.removeItem(saveKey(id)); } catch {}
+export function removeCustom(id, { tell = true } = {}) {
+  write(keys().custom, customPuzzles().filter(a => a.id !== id));
+  write(keys().removed, [...new Set([...list(read(keys().removed, [])), id])]);
+  drop(saveKey(id));
+  if (profileName) {
+    const meta = syncMeta();
+    meta.dirty = without(meta.dirty, id); meta.uploads = without(meta.uploads, id); delete meta.revs[id];
+    if (tell) meta.removals = [...without(meta.removals, id), id];
+    setSyncMeta(meta);
+  }
+}
+
+// Drop these puzzles' saves and puzzles from the current profile, telling no one (used
+// once a guest's progress has moved into an account).
+export function forget(ids) {
+  const gone = new Set(ids);
+  for (const id of gone) drop(saveKey(id));
+  write(keys().custom, customPuzzles().filter(a => !gone.has(a.id)));
 }
 
 // Everything worth keeping, as one object: each puzzle's save, your puzzles, and removals.
 export function snapshot() {
-  const saves = {};
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      const save = key?.startsWith(SAVE) && read(key, null);
-      if (save && typeof save === 'object') saves[key.slice(SAVE.length)] = save;
-    }
-  } catch {}
-  return { saves, custom: customPuzzles(), removed: list(read(REMOVED, [])) };
+  const saves = {}, start = keys().save;
+  for (const key of storageKeys()) {
+    const save = key?.startsWith(start) && read(key, null);
+    if (save && typeof save === 'object') saves[key.slice(start.length)] = save;
+  }
+  return { saves, custom: customPuzzles(), removed: list(read(keys().removed, [])) };
+}
+
+// Forget a profile in this browser: an account's whole copy, or the guest's progress.
+export function clearProfile(name) {
+  const start = name ? `${ROOT}${name}:` : null;
+  const guest = [`${ROOT}sorting-v2:`, `${ROOT}custom-puzzles`, `${ROOT}removed-puzzles`];
+  for (const key of storageKeys()) if (key && (start ? key.startsWith(start) : guest.some(g => key.startsWith(g)))) drop(key);
 }
 
 // Jewels home in a save, or -1 when it does not fit the puzzle (or the puzzle is unknown).
-const reached = (art, save) => { const state = art && restore(art, save); return state ? correctCount(art, state) : -1; };
+export const jewelsHome = (art, save) => { const state = art && restore(art, save); return state ? correctCount(art, state) : -1; };
 
 // Combine two copies of the saves: the furthest progress on each puzzle (then the most
 // recent), every puzzle made in either, and every removal. `keep` names puzzles whose
@@ -59,17 +126,17 @@ export function mergeSaves(mine, theirs, builtIns = [], keep = new Set()) {
     if (gone.has(id)) continue;
     const [a, b] = [ours[id], other[id]].map(s => s && typeof s === 'object' ? s : null);
     if (!a || !b || keep.has(id)) { saves[id] = a || b; continue; }
-    const gain = reached(arts.get(id), b) - reached(arts.get(id), a);
+    const gain = jewelsHome(arts.get(id), b) - jewelsHome(arts.get(id), a);
     saves[id] = gain > 0 || (gain === 0 && (b.savedAt || 0) > (a.savedAt || 0)) ? b : a;
   }
   return { saves, custom, removed };
 }
 
 export function storeSnapshot(snap) {
-  write(CUSTOM, snap.custom);
-  write(REMOVED, snap.removed);
+  write(keys().custom, snap.custom);
+  write(keys().removed, snap.removed);
   for (const [id, save] of Object.entries(snap.saves)) write(saveKey(id), save);
-  for (const id of snap.removed) try { localStorage.removeItem(saveKey(id)); } catch {}
+  for (const id of snap.removed) drop(saveKey(id));
 }
 
 // Saves packed into text short enough for a link: compressed where the browser can.
@@ -89,7 +156,7 @@ export async function unpackSaves(text) {
 
 // Fraction of jewels home, or null for a puzzle never opened.
 export function progress(art) {
-  const state = restore(art, read(saveKey(art.id), null));
+  const state = restore(art, readSave(art.id));
   if (!state) return null;
   return correctCount(art, state) / art.pixels.filter(c => c >= 0).length;
 }
