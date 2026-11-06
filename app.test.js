@@ -170,7 +170,8 @@ test('a visit to the http address hands its saves to https in the link and leave
   const location = { protocol: 'http:', hostname: 'momoswebsiteofthehour.com', pathname: '/', search: '', replace: url => { destination = url; } };
   const { running } = await mount({ location, wait: false });
   running.catch(() => {});
-  for (let i = 0; i < 20 && !destination; i++) await new Promise(resolve => setImmediate(resolve));
+  // Packing the saves is compressed asynchronously, so give it real time on a slow machine.
+  for (let i = 0; i < 400 && !destination; i++) await new Promise(resolve => setTimeout(resolve, 5));
   assert.match(destination, /^https:\/\/momoswebsiteofthehour\.com\/(#carry=[zj][\w-]+)?$/);
 });
 
