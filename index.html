@@ -29,7 +29,7 @@
   </main>
   <main id="game" class="app" aria-label="Pixel Game" hidden>
     <section class="board-wrap" aria-label="Puzzle">
-      <div id="viewport"><canvas id="board" tabindex="0" aria-label="Jewel sorting board. Tap a jewel group, then matching empty spaces or the shelf. Arrow keys move the cursor; Space selects or transfers."></canvas></div>
+      <div id="viewport"><canvas id="board" tabindex="0" aria-label="Jewel sorting board. Tap a jewel group, then matching empty spaces or the shelf. Arrow keys move the cursor; Space selects or transfers."></canvas><canvas id="sparkleLayer" class="sparkle-layer" aria-hidden="true"></canvas></div>
     </section>
     <div class="progress" role="progressbar" id="progress" aria-label="Jewels at home" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-track"><div id="progressFill"></div></div><span id="progressText">0%</span></div>
     <p id="instruction" class="sr-only" role="status">Tap a jewel group, then the shelf.</p>

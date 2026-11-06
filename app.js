@@ -154,21 +154,27 @@ function sparkle(i) {
   sparkles.push({ i, t0: Date.now(), seed: Math.random() * Math.PI * 2 });
   if (!sparkling) { sparkling = true; nextFrame(sparkleTick); }
 }
+// Sparkles live on their own transparent canvas over the board, so a sparkle frame
+// repaints a few tiny stars instead of all 1,024 jewels.
+const sparkleCanvas = $('sparkleLayer'), sctx = sparkleCanvas.getContext('2d');
 function sparkleTick() {
   const now = Date.now();
   sparkles = sparkles.filter(s => now - s.t0 < SPARKLE_MS);
-  draw();
+  drawSparkles();
   if (sparkles.length) nextFrame(sparkleTick); else sparkling = false;
 }
 function sparkleStar(cx, cy, r) {
-  ctx.beginPath();
-  for (let k = 0; k < 8; k++) { const rr = k % 2 ? r * .28 : r, an = k * Math.PI / 4; ctx.lineTo(cx + Math.sin(an) * rr, cy - Math.cos(an) * rr); }
-  ctx.closePath(); ctx.fill();
+  sctx.beginPath();
+  for (let k = 0; k < 8; k++) { const rr = k % 2 ? r * .28 : r, an = k * Math.PI / 4; sctx.lineTo(cx + Math.sin(an) * rr, cy - Math.cos(an) * rr); }
+  sctx.closePath(); sctx.fill();
 }
-function drawSparkles(cell) {
-  if (!sparkles.length) return;
+function drawSparkles() {
+  const dpr = window.devicePixelRatio || 1, cell = size / (art?.width || 1) * zoom;
+  sctx.setTransform(dpr, 0, 0, dpr, 0, 0); sctx.clearRect(0, 0, size, size);
+  if (!sparkles.length || !art) return;
+  sctx.translate(ox, oy);
   const now = Date.now();
-  ctx.fillStyle = '#fff';
+  sctx.fillStyle = '#fff';
   for (const s of sparkles) {
     const p = (now - s.t0) / SPARKLE_MS, cx = (s.i % art.width + .5) * cell, cy = (Math.floor(s.i / art.width) + .5) * cell;
     for (let k = 0; k < 3; k++) {
@@ -205,14 +211,13 @@ function draw() {
   loose.filter(g=>!picked.has(g.i)).forEach(g=>jewel(g.x,g.y,cell,g.color));
   loose.filter(g=>picked.has(g.i)).forEach(g=>jewel(g.x,g.y,cell,g.color,true));
   const focus=keyboard?cursor:-1;
-  drawSparkles(cell);
   if(focus>=0)outlineCell(focus%art.width*cell,Math.floor(focus/art.width)*cell,cell);
   ctx.restore();
 }
 function constrain() { ox = Math.min(0, Math.max(size - size * zoom, ox)); oy = Math.min(0, Math.max(size - size * zoom, oy)); }
 function resize() {
   const old = size; size = $('viewport').clientWidth;
-  const dpr = window.devicePixelRatio || 1; canvas.width = Math.round(size * dpr); canvas.height = Math.round(size * dpr);
+  const dpr = window.devicePixelRatio || 1; canvas.width = sparkleCanvas.width = Math.round(size * dpr); canvas.height = sparkleCanvas.height = Math.round(size * dpr);
   if (old) { ox *= size / old; oy *= size / old; }
   constrain(); draw();
 }
@@ -470,7 +475,7 @@ $('startGame').onclick = () => { const next = nextLevel(); if (next >= 0) openPu
 $('menu').onclick = () => { if (!busy) leaveGame(); };
 
 function openPuzzle(next, levelIndex = null, from = null) {
-  art = next; level = levelIndex; returnTo = from; total = art.pixels.filter(c => c >= 0).length; sparkles = [];
+  art = next; level = levelIndex; returnTo = from; total = art.pixels.filter(c => c >= 0).length; sparkles = []; drawSparkles();
   showScreen('game');
   const saved = readSave(art.id);
   state = restore(art, saved) || createPuzzle(art);
