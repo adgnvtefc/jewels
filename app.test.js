@@ -27,7 +27,7 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
   });
   let elements;
   const element = () => ({
-    children: [], style: { setProperty() {} }, classList: { toggle() {} },
+    children: [], style: { setProperty() {} }, classList: { toggle() {}, add() {}, remove() {} },
     setAttribute() {}, setPointerCapture() {}, addEventListener() {}, focus() {}, select() {},
     querySelector(selector) { return (this.found ??= {})[selector] ??= element(); },
     replaceChildren(...children) { this.children = children; },
@@ -301,6 +301,9 @@ test('puzzles sent to you show in Free play, and only your own can be picked to 
   t.elements.chatButton.onclick();
   t.elements.chatPuzzle.onclick();
   assert.equal(t.elements.pickList.children.length, 1, 'only the puzzle you made');
+  t.elements.pickCreate.onclick();
+  assert.equal(t.elements.create.hidden, false, 'Create puzzle opens the create bar');
+  assert.equal(t.elements.modal.open, false);
 });
 
 test('signing in offers this browser’s guest progress, and moves it once', async () => {

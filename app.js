@@ -549,8 +549,10 @@ async function sendPuzzle(puzzle, note = text => { $('chatStatus').textContent =
 }
 $('chatPuzzle').onclick = () => {
   const mine = customPuzzles().filter(a => !a.from);
-  show(`<p class="eyebrow">SEND A PUZZLE</p><h2>Your puzzles</h2>${mine.length ? '<div class="puzzle-list" id="pickList"></div>' : '<p>Make a puzzle in Free play first, then send it here.</p>'}`);
+  show(`<p class="eyebrow">SEND A PUZZLE</p><h2>Your puzzles</h2>${mine.length ? '<div class="puzzle-list" id="pickList"></div>' : '<p>Nothing here yet. Create one, then send it.</p>'}<button class="primary" id="pickCreate">✦ Create puzzle</button>`);
   for (const puzzle of mine) $('pickList').append(puzzleCard(puzzle, () => { $('modal').close(); sendPuzzle(puzzle); }));
+  // The create bar takes the message box's place; the new puzzle can be sent from there.
+  $('pickCreate').onclick = () => { $('modal').close(); openCreate(); };
 };
 const chat = createChat({
   $, thumbnail, progress,
@@ -619,7 +621,7 @@ function pickCandidate(prompt, choices) {
 function madeIt(puzzle) {
   const friend = friendName();
   show(`<p class="eyebrow">YOUR NEW PUZZLE</p><h2>${esc(puzzle.title)}</h2><img src="${thumbnail(puzzle, 8)}" alt="Your new puzzle"><button class="primary" id="playMade">Play it</button>${friend ? `<button class="home-button" id="sendMade">Send to ${esc(displayName(friend))}</button><p id="sendNote" role="status"></p>` : ''}`);
-  $('playMade').onclick = () => { $('modal').close(); openPuzzle(puzzle); };
+  $('playMade').onclick = () => { $('modal').close(); openPuzzle(puzzle, null, $('chat').hidden ? null : 'chat'); };
   if (friend) $('sendMade').onclick = async () => {
     $('sendMade').disabled = true; $('sendNote').textContent = 'Sending…';
     const sent = await sendPuzzle(puzzle, text => { $('sendNote').textContent = text; });
