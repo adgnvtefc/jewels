@@ -50,7 +50,7 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
   const store = { ...stored }, sorting = 'little-jewel:sorting-v2:', calls = [];
   const running = runInNewContext(`(async () => {
     ${source}
-    return { view: () => ({zoom, ox, oy}), isBusy: () => busy };
+    return { view: () => ({zoom, ox, oy}), isBusy: () => busy, sparkles: () => sparkles.map(s => s.i) };
   })()`, {
     game, console, window: { devicePixelRatio: 1 },
     document: { getElementById: id => elements[id] ?? null, createElement: element, body: element(), visibilityState: 'visible', addEventListener() {} },
@@ -100,9 +100,11 @@ test('minimal UI loads and transfers board → shelf → board without camera ju
   await t.settle();
   assert.deepEqual(t.saved().board, [1, -1, 1, -1]);
   assert.deepEqual(t.saved().shelf.slice(0, 2), [0, 0]);
+  assert.deepEqual([...t.app.sparkles()], [], 'no sparkle for jewels put on the shelf');
   await t.tap(100, 100); // Yellow jewels.
   await t.tap(300, 100); // Place them on the freed yellow spaces.
   assert.deepEqual(t.saved().board, [-1, 1, -1, 1]);
+  assert.deepEqual([...t.app.sparkles()].sort(), [1, 3], 'each jewel landing in its spot sparkles');
   const view = JSON.stringify(t.app.view());
   t.elements.shelf.children[0].onclick();
   assert.equal(JSON.stringify(t.app.view()), view, 'shelf selection must not zoom or pan');

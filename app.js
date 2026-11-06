@@ -145,6 +145,38 @@ function socket(x,y,cell,color,highlight=false) {
   ctx.fillStyle=shade;ctx.fillRect(x0,y0,w,w);ctx.restore();
   octagon(x0,y0,w);ctx.strokeStyle=highlight?'#ffffffd9':'#00000012';ctx.lineWidth=highlight?Math.max(1,cell*.065):Math.max(.5,cell*.02);ctx.stroke();
 }
+// Glitter: three tiny white stars pop around a jewel, one after another, when it lands
+// in its right spot on the picture. Not for the shelf, and not with reduced motion.
+const SPARKLE_MS = 450;
+let sparkles = [], sparkling = false;
+function sparkle(i) {
+  if (reducedMotion || !art || state.board[i] !== art.pixels[i]) return;
+  sparkles.push({ i, t0: Date.now(), seed: Math.random() * Math.PI * 2 });
+  if (!sparkling) { sparkling = true; nextFrame(sparkleTick); }
+}
+function sparkleTick() {
+  const now = Date.now();
+  sparkles = sparkles.filter(s => now - s.t0 < SPARKLE_MS);
+  draw();
+  if (sparkles.length) nextFrame(sparkleTick); else sparkling = false;
+}
+function sparkleStar(cx, cy, r) {
+  ctx.beginPath();
+  for (let k = 0; k < 8; k++) { const rr = k % 2 ? r * .28 : r, an = k * Math.PI / 4; ctx.lineTo(cx + Math.sin(an) * rr, cy - Math.cos(an) * rr); }
+  ctx.closePath(); ctx.fill();
+}
+function drawSparkles(cell) {
+  if (!sparkles.length) return;
+  const now = Date.now();
+  ctx.fillStyle = '#fff';
+  for (const s of sparkles) {
+    const p = (now - s.t0) / SPARKLE_MS, cx = (s.i % art.width + .5) * cell, cy = (Math.floor(s.i / art.width) + .5) * cell;
+    for (let k = 0; k < 3; k++) {
+      const q = (p - k * .2) / .6, an = s.seed + k * 2.1;
+      if (q > 0 && q < 1) sparkleStar(cx + Math.cos(an) * cell * .55, cy + Math.sin(an) * cell * .55, cell * .3 * Math.sin(Math.PI * q));
+    }
+  }
+}
 function outlineCell(x,y,cell) {
   // A restrained focus ring is reserved for keyboard navigation.
   ctx.strokeStyle='#fff';ctx.lineWidth=Math.max(1,cell*.045);ctx.setLineDash([cell*.12,cell*.08]);
@@ -173,6 +205,7 @@ function draw() {
   loose.filter(g=>!picked.has(g.i)).forEach(g=>jewel(g.x,g.y,cell,g.color));
   loose.filter(g=>picked.has(g.i)).forEach(g=>jewel(g.x,g.y,cell,g.color,true));
   const focus=keyboard?cursor:-1;
+  drawSparkles(cell);
   if(focus>=0)outlineCell(focus%art.width*cell,Math.floor(focus/art.width)*cell,cell);
   ctx.restore();
 }
@@ -241,7 +274,7 @@ function land(key, el) {
       let board = false;
       for (const [key] of batch) {
         arrivals.delete(key);
-        if (key.startsWith('board:')) { board = true; continue; }
+        if (key.startsWith('board:')) { board = true; sparkle(Number(key.slice(6))); continue; }
         const i = Number(key.slice(6));
         if (state.shelf[i] >= 0 && shelfButtons[i]) shelfButtons[i].innerHTML = '<span class="shelf-jewel"></span>';
       }
@@ -276,7 +309,12 @@ async function move(kind, index) {
   arrivals = new Set(motion.map(t=>`${t.to.kind}:${t.to.index}`));
   state = result.state; selection = continueSelection(art,state,selection); save(); update();
   message(`${result.transfers.length} ${result.transfers.length === 1 ? 'jewel' : 'jewels'} ${kind === 'shelf' ? 'on the shelf. Now make room for their color.' : 'back where they belong.'}`);
-  try { await animate(motion); } finally { arrivals.clear(); busy = false; update(); }
+  try { await animate(motion); } finally {
+    arrivals.clear(); busy = false; update();
+    // Jewels past the first 64 don't fly; they sparkle as they appear.
+    const flown = new Set(motion.map(t => `${t.to.kind}:${t.to.index}`));
+    for (const t of result.transfers) if (t.to.kind === 'board' && !flown.has(`board:${t.to.index}`)) sparkle(t.to.index);
+  }
   if (correctCount(art, state) === total) {
     track('level_complete', { puzzle: art.id, title: art.title, custom: !builtIns.some(a => a.id === art.id), moves: state.moves, colors: art.colors.length, jewels: total });
     syncSoon(0);
@@ -400,7 +438,7 @@ $('startGame').onclick = () => { const next = nextLevel(); if (next >= 0) openPu
 $('menu').onclick = () => { if (!busy) leaveGame(); };
 
 function openPuzzle(next, levelIndex = null, from = null) {
-  art = next; level = levelIndex; returnTo = from; total = art.pixels.filter(c => c >= 0).length;
+  art = next; level = levelIndex; returnTo = from; total = art.pixels.filter(c => c >= 0).length; sparkles = [];
   showScreen('game');
   const saved = readSave(art.id);
   state = restore(art, saved) || createPuzzle(art);
