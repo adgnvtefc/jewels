@@ -13,6 +13,11 @@ const inline = file => {
 
 // Run the real app entry point against its actual HTML IDs and a small DOM.
 // This catches missing-control crashes that pure puzzle tests cannot detect.
+// What the fake canvas reads back from a painted picture: a red disc on white, 64 × 64.
+const picture = new Uint8ClampedArray(64 * 64 * 4).map((_, i) => {
+  const p = i >> 2, x = p % 64, y = p >> 6, inside = (x - 32) ** 2 + (y - 32) ** 2 < 400;
+  return i % 4 === 3 ? 255 : inside ? [220, 40, 40][i % 4] : 250;
+});
 const art = { id: 'interaction-test', width: 2, height: 2,
   colors: ['#0088ff', '#ffee00'], pixels: [0, 1, 0, 1] };
 async function mount({ location = { search: '', hostname: 'example.test' }, history = {}, wait = true, levels = 1, bonus = 0,
@@ -22,6 +27,7 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
   const ctx = new Proxy({}, {
     get(target, name) {
       if (name === 'createLinearGradient') return () => ({ addColorStop() {} });
+      if (name === 'getImageData') return () => ({ data: picture });
       return target[name] ?? (() => {});
     },
   });
@@ -45,7 +51,7 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
   const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
   elements = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(([, id]) => [id, element()]));
   const source = `const {${Object.keys(game)}} = game;\n`
-    + ['./convert.js', './account.js', './library.js', './generator.js', './sync.js', './chat.js'].map(inline).join('\n')
+    + ['./convert.js', './account.js', './library.js', './generator.js', './sync.js', './chat.js', './create.js'].map(inline).join('\n')
     + readFileSync(new URL('./app.js', import.meta.url), 'utf8').replace(/^import .*$/gm, '');
   const store = { ...stored }, sorting = 'little-jewel:sorting-v2:', calls = [];
   const running = runInNewContext(`(async () => {
@@ -55,6 +61,7 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
     game, console, window: { devicePixelRatio: 1 },
     document: { getElementById: id => elements[id] ?? null, createElement: element, body: element(), visibilityState: 'visible', addEventListener() {} },
     confirm, navigator,
+    Image: class { naturalWidth = 64; naturalHeight = 64; decode() { return Promise.resolve(); } },
     fetch: async (url, options = {}) => url.includes('/api/') ? (() => {
       const path = url.slice(url.indexOf('/api/')), body = options.body ? JSON.parse(options.body) : undefined;
       calls.push({ method: options.method || 'GET', path, body });
@@ -192,23 +199,22 @@ test('saves carried in the link are merged in on https, and the link is cleaned 
   assert.equal(t.elements.startGame.disabled, true, 'the level shows as complete');
 });
 
-test('Fill and skip finishes levels 1-10, opens level 11 next, and then hides itself', async () => {
+test('the start screen has no skip button any more, and no bonus pop-up without bonus puzzles', async () => {
   const t = await mount({ levels: 11 });
-  assert.equal(t.elements.skipAhead.hidden, false);
+  assert.equal(t.elements.skipAhead, undefined);
   assert.equal(t.elements.startLevel.textContent, 'Level 1 of 11');
-  t.elements.skipAhead.onclick();
-  for (const id of ['interaction-test', ...Array.from({ length: 9 }, (_, n) => `level-${n + 2}`)]) assert.deepEqual(t.saves[id].board, art.pixels, id);
-  assert.equal(t.saves['level-11'], undefined, 'level 11 is left to play');
-  assert.equal(t.elements.startLevel.textContent, 'Level 11 of 11');
-  assert.equal(t.elements.skipAhead.hidden, true);
-  t.elements.gallery.onclick();
-  assert.equal((t.elements.modalContent.markup.match(/gallery-item/g) || []).length, 10);
+  assert.equal(t.elements.bonusTip.hidden, true, 'no bonus puzzles, no pop-up');
 });
 
-test('with ten levels or fewer there is nothing to skip to', async () => {
-  const t = await mount();
-  assert.equal(t.elements.skipAhead.hidden, true);
-  assert.equal(t.elements.bonusTip.hidden, true, 'no bonus puzzles, no pop-up');
+test('the move counter shows the moves so far, and the header names the level', async () => {
+  const t = await mount({ saved: { board: [1, 0, 1, 0], shelf: Array(24).fill(-1), moves: 1 } });
+  t.elements.startGame.onclick();
+  assert.equal(t.elements.moveCount.textContent, '1 move');
+  assert.equal(t.elements.puzzleName.textContent, 'Level 1 · ' + art.title);
+  await t.tap(300, 100);
+  t.elements.shelf.children[0].onclick();
+  await t.settle();
+  assert.equal(t.elements.moveCount.textContent, '2 moves');
 });
 
 test('bonus puzzles live in Free play, not the levels, and the pop-up goes once Free play opens', async () => {
@@ -305,8 +311,8 @@ test('puzzles sent to you show in Free play, and only your own can be picked to 
   t.elements.chatPuzzle.onclick();
   assert.equal(t.elements.pickList.children.length, 1, 'only the puzzle you made');
   t.elements.pickCreate.onclick();
-  assert.equal(t.elements.create.hidden, false, 'Create puzzle opens the create bar');
-  assert.equal(t.elements.modal.open, false);
+  assert.ok(t.elements.createForm, 'Create puzzle opens the create pop-up');
+  assert.equal(t.elements.modal.open, true);
 });
 
 test('signing in offers this browser’s guest progress, and moves it once', async () => {
@@ -361,4 +367,79 @@ test('on an iPhone, the Add to Home Screen hint shows once, and never in the Hom
   assert.notEqual(app.elements.modal.open, true, 'not when already on the Home Screen');
   const desktop = await mount({ navigator: { userAgent: 'Mozilla/5.0 (Macintosh)', platform: 'MacIntel', maxTouchPoints: 0 } });
   assert.notEqual(desktop.elements.modal.open, true, 'not on a computer');
+});
+
+// The create pop-up, from the start screen: idea → four versions → Play now, Save or Try again.
+function painter(jobs = { n: 0 }) {
+  const server = fakeServer();
+  return (method, path, body) => {
+    if (path === '/api/jobs' && method === 'POST') { jobs.n++; jobs.prompt = body.prompt; return [202, { id: `j${jobs.n}` }]; }
+    if (path.startsWith('/api/jobs/')) return [200, { status: 'done', subject: 'a red ball', images: ['data:a', 'data:b'], seconds: 5 }];
+    if (path === '/api/puzzles') return [201, { ok: true }];
+    return server(method, path, body);
+  };
+}
+async function createFromHome(t, idea = 'a red ball') {
+  delete t.elements.candidates;
+  t.elements.createHome.onclick();
+  t.elements.prompt.value = idea;
+  t.elements.createForm.onsubmit({ preventDefault() {} });
+  for (let i = 0; i < 300 && !t.elements.candidates?.children.length; i++) await tick(10);
+  assert.equal(t.elements.candidates.children.length, 2, 'one version per picture');
+}
+const made = t => JSON.parse(t.store['little-jewel:hanmo:custom-puzzles'] || '[]');
+
+test('a guest who taps Create puzzle on the start screen is asked to sign in first', async () => {
+  const t = await mount();
+  t.elements.createHome.onclick();
+  assert.ok(t.elements.signInForm);
+  assert.match(t.elements.modalContent.markup, /Creating puzzles needs an account/);
+});
+
+test('Create puzzle: the picked version is saved only on Play now, and opens', async () => {
+  const jobs = { n: 0 }, t = await mount({ stored: signedIn, server: painter(jobs) });
+  await tick();
+  await createFromHome(t);
+  assert.equal(jobs.prompt, 'a red ball');
+  t.elements.candidates.children[0].onclick();
+  assert.match(t.elements.modalContent.markup, /Play now.*Save to Free play.*Try again/);
+  assert.doesNotMatch(t.elements.modalContent.markup, /Send to/, 'no sending from here');
+  assert.equal(made(t).length, 0, 'not saved until a choice is made');
+  t.elements.playMade.onclick(); t.elements.modal.onclose();
+  assert.equal(made(t).length, 1);
+  assert.equal(made(t)[0].title, 'A red ball');
+  assert.equal(t.elements.game.hidden, false, 'the new puzzle is on the board');
+  assert.equal(t.elements.puzzleName.textContent, 'A red ball');
+});
+
+test('Create puzzle: Save to Free play keeps it there; closing the pop-up keeps it too', async () => {
+  const t = await mount({ stored: signedIn, server: painter() });
+  await tick();
+  await createFromHome(t);
+  t.elements.candidates.children[1].onclick();
+  t.elements.keepMade.onclick();
+  assert.equal(made(t).length, 1);
+  assert.equal(t.elements.puzzleList.children.length, 1, 'Free play opens, showing it');
+  t.elements.modal.close(); t.elements.modal.onclose();
+  assert.equal(made(t).length, 1, 'saved once');
+  await createFromHome(t, 'a blue cup');
+  t.elements.candidates.children[0].onclick();
+  t.elements.modal.onclose();
+  assert.equal(made(t).length, 1, 'a late close event from an earlier pop-up is ignored while this one is open');
+  t.elements.modal.close(); t.elements.modal.onclose();
+  assert.equal(made(t).length, 2, 'closed with ×, still kept');
+  assert.equal(t.elements.home.hidden, false);
+});
+
+test('Create puzzle: Try again throws the version away and paints the same idea again', async () => {
+  const jobs = { n: 0 }, t = await mount({ stored: signedIn, server: painter(jobs) });
+  await tick();
+  await createFromHome(t);
+  t.elements.candidates.children[0].onclick();
+  t.elements.againMade.onclick();
+  assert.match(t.elements.modalContent.markup, /id="prompt"[^>]*value="a red ball"/, 'the idea stays in the box');
+  for (let i = 0; i < 300 && jobs.n < 2; i++) await tick(10);
+  assert.equal(jobs.n, 2);
+  t.elements.modal.close(); t.elements.modal.onclose();
+  assert.equal(made(t).length, 0, 'nothing was kept');
 });

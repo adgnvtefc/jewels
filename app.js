@@ -1,7 +1,7 @@
 import { createPuzzle, select, transfer, correctCount, restore, shelfAction, continueSelection, expandShelf, MAX_SHELF_SIZE, SHELF_SIZE } from './game.js';
 import { builtInPuzzles, customPuzzles, addCustom, removeCustom, progress, thumbnail, readSave, writeSave, snapshot, mergeSaves, storeSnapshot, packSaves, unpackSaves, useProfile, withProfile, clearProfile, forget, jewelsHome, syncMeta } from './library.js';
-import { currentAccount, online, friendName, displayName, takeOldPassword, whenSignedOut, signIn, signOut, ServerError } from './account.js';
-import { generate, pictureToArt } from './generator.js';
+import { currentAccount, online, friendName, displayName, takeOldPassword, whenSignedOut, signIn, signOut } from './account.js';
+import { createMaker } from './create.js';
 import { syncAccount, unsent } from './sync.js';
 import { createChat } from './chat.js';
 const $ = id => document.getElementById(id);
@@ -105,6 +105,7 @@ function update() {
   $('progressFill').style.width = `${percent}%`;
   $('progressText').textContent = `${percent}%`;
   $('progress').setAttribute('aria-valuenow', String(percent));
+  $('moveCount').textContent = `${state.moves} ${state.moves === 1 ? 'move' : 'moves'}`;
   save(); draw();
 }
 // Visual states follow the reference: recessed socket, raised loose jewel,
@@ -407,7 +408,9 @@ canvas.onkeydown = e => {
 };
 let afterClose = null;
 function show(content, then = null) { afterClose=then; $('modalContent').innerHTML=content; if (!$('modal').open) $('modal').showModal(); }
-$('modal').onclose = () => { const next=afterClose; afterClose=null; next?.(); };
+// The close event comes a moment after close(); if the dialog has reopened by then with
+// new content, that event is stale and the new content's handler waits for its own close.
+$('modal').onclose = () => { if ($('modal').open) return; const next=afterClose; afterClose=null; next?.(); };
 $('close').onclick = () => $('modal').close();
 $('modal').onclick = e => { if(e.target===$('modal')){const r=$('modal').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)$('modal').close();} };
 $('addShelf').onclick=()=>{
@@ -429,7 +432,6 @@ function goHome() {
   }).join('');
   $('startGame').disabled = next < 0;
   $('startLevel').textContent = next < 0 ? 'All levels complete' : `Level ${next + 1} of ${builtIns.length}`;
-  $('skipAhead').hidden = builtIns.length <= SKIP_TO || builtIns.slice(0, SKIP_TO).every(puzzle => progress(puzzle) === 1);
   $('bonusTip').hidden = bonus.every(puzzle => bonusSeen().includes(puzzle.id));
   renderAccount();
 }
@@ -457,18 +459,6 @@ function seeBonus() {
   try { localStorage.setItem(BONUS_SEEN, JSON.stringify([...new Set([...bonusSeen(), ...bonus.map(puzzle => puzzle.id)])])); } catch {}
   $('bonusTip').hidden = true;
 }
-// Finishes levels 1-10 at once, each saved as its completed picture, for players who
-// already played them elsewhere. Saved like any finished level, so it syncs too.
-const SKIP_TO = 10;
-$('skipAhead').onclick = () => {
-  for (const puzzle of builtIns.slice(0, SKIP_TO)) {
-    if (progress(puzzle) === 1) continue;
-    writeSave(puzzle.id, { board: [...puzzle.pixels], shelf: Array(SHELF_SIZE).fill(-1), moves: 0, selectedColor: null, savedAt: Date.now() });
-  }
-  track('skip_ahead', { to: SKIP_TO + 1 });
-  syncSoon(0);
-  goHome();
-};
 // Levels are the built-in puzzles, in order; the next one is the first not yet finished.
 const nextLevel = () => builtIns.findIndex(puzzle => progress(puzzle) !== 1);
 $('startGame').onclick = () => { const next = nextLevel(); if (next >= 0) openPuzzle(builtIns[next], next); };
@@ -483,6 +473,7 @@ function openPuzzle(next, levelIndex = null, from = null) {
     ? continueSelection(art,state,{kind:'color',color:saved.selectedColor,cells:[]}) : null;
   cursor = 0; keyboard = false; zoom = 1; ox = oy = 0;
   constrain(); update();
+  $('puzzleName').textContent = `${level === null ? '' : `Level ${level + 1} · `}${art.title}`;
   message(`${level === null ? '' : `Level ${level + 1}: `}${art.title}. Tap a jewel group, then the shelf.`);
 }
 
@@ -513,12 +504,10 @@ function freePlay() {
   for (const puzzle of bonus) $('bonusList').append(puzzleCard(puzzle));
   for (const puzzle of sent) $('sentList').append(removable(puzzle));
   for (const puzzle of mine) $('puzzleList').append(removable(puzzle));
-  $('createOwn').onclick = () => {
-    if (online()) { $('modal').close(); openCreate(); }
-    else signInPrompt({ note: 'Creating puzzles needs an account.', then: openCreate });
-  };
+  $('createOwn').onclick = maker.start;
 }
 $('freePlay').onclick = freePlay;
+$('createHome').onclick = () => maker.start();
 $('bonusTip').onclick = freePlay;
 
 // Gallery: every finished picture, levels first, then the bonus ones, then your own.
@@ -649,8 +638,8 @@ $('chatPuzzle').onclick = () => {
   const mine = customPuzzles().filter(a => !a.from);
   show(`<p class="eyebrow">SEND A PUZZLE</p><h2>Your puzzles</h2>${mine.length ? '<div class="puzzle-list" id="pickList"></div>' : '<p>Nothing here yet. Create one, then send it.</p>'}<button class="primary" id="pickCreate">✦ Create puzzle</button>`);
   for (const puzzle of mine) $('pickList').append(puzzleCard(puzzle, () => { $('modal').close(); sendPuzzle(puzzle); }));
-  // The create bar takes the message box's place; the new puzzle can be sent from there.
-  $('pickCreate').onclick = () => { $('modal').close(); openCreate(); };
+  // A puzzle made from here lands in this list; tap 🧩 again to send it.
+  $('pickCreate').onclick = maker.start;
 };
 const chat = createChat({
   $, thumbnail, progress,
@@ -664,69 +653,18 @@ const chat = createChat({
 whenSignedOut(() => { chat.stop(); if (!$('chat').hidden) goHome(); else renderAccount(); });
 // On phones, keep the message box above the on-screen keyboard.
 window.visualViewport?.addEventListener('resize', () => document.documentElement?.style.setProperty('--viewport-height', `${window.visualViewport.height}px`));
+// Pinching zooms the board (pointer events above), never the page: Safari ignores
+// maximum-scale, so its own pinch gestures are turned down here.
+for (const type of ['gesturestart', 'gesturechange']) document.addEventListener?.(type, e => e.preventDefault(), { passive: false });
 
-// The create bar sits at the bottom of the screen; results come back as candidates to pick from.
-let creating = false;
-function openCreate() {
-  $('create').hidden = false; document.body.classList.add('creating');
-  $('createStatus').textContent = 'Describe a picture. You’ll get four to choose from.';
-  $('prompt').focus();
-}
-$('createClose').onclick = () => { $('create').hidden = true; document.body.classList.remove('creating'); };
-const status = text => { $('createStatus').textContent = text; };
-$('create').onsubmit = async e => {
-  e.preventDefault();
-  const prompt = $('prompt').value.trim();
-  if (!prompt || creating) return;
-  creating = true; $('createGo').disabled = true; status('Sending your idea…');
-  const started = Date.now();
-  try {
-    const job = await generate(prompt, job => {
-      if (job.status === 'queued') status(job.ahead ? `Waiting in line (${job.ahead} ahead)…` : 'Starting…');
-      else if (job.status === 'writing') status('Thinking about your idea…');
-      else if (job.status === 'painting') status(`Painting “${job.subject}” — ${job.painted} of ${job.total}…`);
-    });
-    status('Cutting the jewels…');
-    const choices = await Promise.all(job.images.map(src => pictureToArt(src, { title: prompt[0].toUpperCase() + prompt.slice(1, 60) })));
-    track('llm_generate', { ok: true, prompt, subject: job.subject, agent: job.agent, images: job.images.length, seconds: job.seconds, ms: Date.now() - started });
-    status(''); pickCandidate(prompt, choices);
-  } catch (error) {
-    track('llm_generate', { ok: false, prompt, error: error.message, status: error.status, ms: Date.now() - started });
-    if (error instanceof ServerError && error.status === 401) { $('createClose').onclick(); signInPrompt({ note: 'Please sign in again.', then: openCreate }); }
-    else status(error.message || 'Something went wrong.');
-  } finally { creating = false; $('createGo').disabled = false; }
-};
-
-function pickCandidate(prompt, choices) {
-  show(`<p class="eyebrow">CREATE YOUR OWN</p><h2>Pick one</h2><p>${esc(prompt)}</p><div class="candidates" id="candidates"></div><button class="primary" id="again">Try again</button>`);
-  choices.forEach((choice, n) => {
-    const button = document.createElement('button');
-    button.className = 'candidate'; button.setAttribute('aria-label', `Option ${n + 1}, ${choice.colors.length} colors`);
-    button.innerHTML = `<img alt="" src="${thumbnail({ ...choice, id: `choice-${Date.now()}-${n}` }, 4)}"><span>${choice.colors.length} colors</span>`;
-    button.onclick = () => {
-      const puzzle = { ...choice, id: `custom-${Date.now().toString(36)}` };
-      if (!addCustom(puzzle)) { status('This browser could not save the puzzle.'); return; }
-      track('llm_pick', { prompt, option: n + 1, colors: choice.colors.length });
-      $('createClose').onclick(); $('prompt').value = '';
-      syncSoon(0);
-      madeIt(puzzle);
-    };
-    $('candidates').append(button);
-  });
-  $('again').onclick = () => { $('modal').close(); $('create').requestSubmit(); };
-}
-// The new puzzle: play it now, or send it to your friend.
-function madeIt(puzzle) {
-  const friend = friendName();
-  show(`<p class="eyebrow">YOUR NEW PUZZLE</p><h2>${esc(puzzle.title)}</h2><img src="${thumbnail(puzzle, 8)}" alt="Your new puzzle"><button class="primary" id="playMade">Play it</button>${friend ? `<button class="home-button" id="sendMade">Send to ${esc(displayName(friend))}</button><p id="sendNote" role="status"></p>` : ''}`);
-  $('playMade').onclick = () => { $('modal').close(); openPuzzle(puzzle, null, $('chat').hidden ? null : 'chat'); };
-  if (friend) $('sendMade').onclick = async () => {
-    $('sendMade').disabled = true; $('sendNote').textContent = 'Sending…';
-    const sent = await sendPuzzle(puzzle, text => { $('sendNote').textContent = text; });
-    if (sent) $('sendNote').textContent = `Sent! It’s in your chat with ${displayName(friend)}.`;
-    else $('sendMade').disabled = false;
-  };
-}
+// Making a puzzle: the same pop-up from the start screen, Free play and the chat (create.js).
+const maker = createMaker({
+  $, show, esc, thumbnail, track,
+  keep: puzzle => { if (customPuzzles().some(a => a.id === puzzle.id)) return true; if (!addCustom(puzzle)) return false; syncSoon(0); return true; },
+  play: puzzle => openPuzzle(puzzle, null, $('chat').hidden ? null : 'chat'),
+  freePlay,
+  signIn: (note, then) => signInPrompt({ note, then }),
+});
 
 // iPhone and iPad can't show a web page fullscreen; added to the Home Screen, the game
 // opens from its own icon in its own window, with no address bar. Suggested once.

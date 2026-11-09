@@ -5,6 +5,9 @@
   font-synthesis: none;
 }
 * { box-sizing: border-box; }
+/* The screens fit the window and never scroll; only the chat, the shelf and long pop-ups do.
+   Pinching zooms the board (app.js), not the page. */
+html, body { height: 100%; overflow: hidden; overscroll-behavior: none; touch-action: pan-x pan-y; }
 body { margin: 0; }
 [hidden] { display: none !important; }
 button {
@@ -15,26 +18,31 @@ button {
 button:disabled { opacity: .3; cursor: default; }
 button:focus-visible, canvas:focus-visible { outline: 3px solid #c47b46; outline-offset: 1px; }
 .app {
-  width: 100%; max-width: 600px; margin: auto;
+  width: 100%; max-width: 600px; margin: auto; height: 100vh; height: 100dvh;
+  display: flex; flex-direction: column; justify-content: center;
   padding: max(4px, env(safe-area-inset-top)) max(4px, env(safe-area-inset-right)) max(4px, env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
 }
 .home {
-  min-height: 100svh; max-width: 420px; margin: auto; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 10px; text-align: center;
+  height: 100vh; height: 100dvh; max-width: 420px; margin: auto; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: clamp(5px, 1.2dvh, 10px); text-align: center;
   padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
 }
-.home h1 { font: 44px Georgia, serif; letter-spacing: -1px; margin: 0; }
-.levels { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; list-style: none; padding: 0; margin: 18px 0 22px; }
-.level-pip { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 9px; overflow: hidden; font-size: 13px; color: #a3ab9f; background: #ece9de; border: 1px solid #e3e6da; }
+.home h1 { font: clamp(32px, 6dvh, 44px) Georgia, serif; letter-spacing: -1px; margin: 0; }
+.levels { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; list-style: none; padding: 0; margin: clamp(6px, 2dvh, 18px) 0 clamp(8px, 2.6dvh, 22px); }
+.level-pip { display: grid; place-items: center; width: clamp(28px, 5.2dvh, 44px); height: clamp(28px, 5.2dvh, 44px); border-radius: 9px; overflow: hidden; font-size: 13px; color: #a3ab9f; background: #ece9de; border: 1px solid #e3e6da; }
 .level-pip img { width: 100%; height: 100%; image-rendering: pixelated; }
 .level-pip.current { background: #fff; color: #3f6d59; font-weight: 600; border-color: #3f6d59; box-shadow: 0 0 0 1px #3f6d59; }
 .level-pip.done { border-color: #fff; box-shadow: 0 2px 6px #294b451a; }
 .home .primary, .home-button { width: 100%; max-width: 280px; margin: 0; }
-.start-game { display: grid; gap: 2px; font-size: 15px; }
+.start-game { display: grid; gap: 2px; font-size: 15px; padding-block: clamp(8px, 1.6dvh, 14px); }
 #startLevel { font-size: 11px; opacity: .8; }
-.home-button { min-height: 48px; border-radius: 30px; border: 1px solid #d9ddcf; background: #fff; font-size: 14px; color: #3c614f; }
-.board-wrap { width: 100%; }
-#viewport { position: relative; width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: 3px; background: #f9f9f4; touch-action: none; cursor: pointer; }
+.home-button { min-height: clamp(40px, 5.7dvh, 48px); border-radius: 30px; border: 1px solid #d9ddcf; background: #fff; font-size: 14px; color: #3c614f; }
+/* The board is as big as the width allows, shrinking only when the window is too short. */
+.game-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 0 4px 6px; font-size: 12px; color: #748478; }
+#puzzleName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#moveCount { flex: none; color: #294b45; font-variant-numeric: tabular-nums; }
+.board-wrap { width: 100%; flex: 1 1 0; min-height: 0; max-height: calc(min(100vw, 600px) - 8px); container-type: size; display: grid; place-items: center; }
+#viewport { position: relative; width: min(100cqw, 100cqh); height: min(100cqw, 100cqh); overflow: hidden; border-radius: 3px; background: #f9f9f4; touch-action: none; cursor: pointer; }
 canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .sparkle-layer { position: absolute; inset: 0; pointer-events: none; }
 .progress { display: flex; align-items: center; gap: 8px; padding: 6px 4px 0; }
@@ -64,7 +72,7 @@ canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .flying-jewel { position: fixed; pointer-events: none; z-index: 10; }
 .add-shelf { display: block; min-height: 44px; width: 100%; font-size: 12px; color: #3c614f; }
 .shelf-scroll-note { margin: -4px 0 8px; text-align: center; font-size: 10px; color: #748478; }
-dialog { border: 1px solid #e3e6da; background: #f8f7f2; color: #294b45; width: min(370px,calc(100% - 36px)); border-radius: 24px; padding: 32px; box-shadow: 0 20px 70px #193a4430; }
+dialog { overscroll-behavior: contain; border: 1px solid #e3e6da; background: #f8f7f2; color: #294b45; width: min(370px,calc(100% - 36px)); border-radius: 24px; padding: 32px; box-shadow: 0 20px 70px #193a4430; }
 dialog::backdrop { background: #233e3b66; backdrop-filter: blur(5px); }
 .close { position: absolute; right: 10px; top: 10px; width: 44px; height: 44px; font-size: 24px; }
 dialog h2 { font: 30px Georgia,serif; margin-top: 14px; }
@@ -82,30 +90,23 @@ dialog .puzzle-pick img, dialog .candidate img, dialog .gallery-item img { margi
 .gallery-item { display: grid; gap: 4px; margin: 0; padding: 8px; border-radius: 14px; background: #fff; border: 1px solid #e3e6da; }
 .gallery-item figcaption { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .puzzle-remove { position: absolute; top: 2px; right: 2px; width: 32px; height: 32px; border-radius: 50%; background: #f8f7f2e6; font-size: 18px; line-height: 1; }
-.unlock input, .create input {
+.unlock input, .create-form input {
   font: inherit; font-size: 16px; color: inherit; width: 100%; min-height: 44px; padding: 10px 14px;
   border: 1px solid #d9ddcf; border-radius: 22px; background: #fff;
 }
-.unlock input:focus-visible, .create input:focus-visible { outline: 3px solid #c47b46; outline-offset: 1px; }
+.unlock input:focus-visible, .create-form input:focus-visible { outline: 3px solid #c47b46; outline-offset: 1px; }
 .candidates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 14px 0 4px; }
 .candidate { display: grid; gap: 4px; padding: 8px; border-radius: 14px; background: #fff; border: 1px solid #e3e6da; font-size: 10px; color: #748478; }
-.create {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; margin: 0 auto; max-width: 600px;
-  padding: 10px max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
-  background: #f8f7f2f2; border-top: 1px solid #e3e6da; box-shadow: 0 -8px 30px #193a4418; backdrop-filter: blur(8px);
-}
-.create-row { display: flex; gap: 6px; align-items: center; }
-#createGo { min-height: 44px; padding: 0 18px; border-radius: 22px; background: #3f6d59; color: #fff; font-size: 13px; flex: none; }
-#createClose { width: 44px; height: 44px; font-size: 22px; flex: none; }
-#createStatus { margin: 6px 6px 0; min-height: 1.4em; font-size: 12px; color: #748478; }
-body.creating .app, body.creating .home { padding-bottom: 120px; }
-body.creating .chat-form { display: none; }
+.create-form { display: grid; gap: 0; }
+.create-form input[readonly] { background: #f1efe7; color: #748478; }
+#createStatus { min-height: 1.7em; margin-bottom: 0; }
 @media (min-width: 650px) { .app { padding-top: 12px; } }
 @media (orientation: landscape) and (max-height: 600px) {
-  .app { max-width: none; display: grid; grid-template-columns: minmax(0,1fr) minmax(160px,240px); align-items: center; gap: 8px; }
-  .board-wrap { width: min(100%,calc(100svh - 16px)); justify-self: center; grid-row: 1 / 3; }
-  .progress { grid-column: 2; grid-row: 1; align-self: end; }
-  .tray { grid-column: 2; grid-row: 2; align-self: start; }
+  .app { max-width: none; display: grid; grid-template-columns: minmax(0,1fr) minmax(160px,240px); grid-template-rows: 1fr auto auto auto 1fr; gap: 0 8px; }
+  .board-wrap { width: min(100%,calc(100dvh - 16px)); max-height: none; align-self: stretch; justify-self: center; grid-column: 1; grid-row: 1 / -1; }
+  .game-top { grid-column: 2; grid-row: 2; padding-bottom: 0; }
+  .progress { grid-column: 2; grid-row: 3; }
+  .tray { grid-column: 2; grid-row: 4; }
 }
 .bonus-tip {
   position: relative; margin: 0 0 6px; padding: 8px 16px; border-radius: 16px; background: #c47b46; color: #fff;
