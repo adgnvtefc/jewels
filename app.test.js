@@ -237,17 +237,17 @@ test('bonus puzzles live in Free play, not the levels, and the pop-up goes once 
   assert.equal(t.elements.startLevel.textContent, 'Level 1 of 1');
 });
 
-// A signed-in browser: hanmo, friends with anushka, talking to a fake server.
+// A signed-in browser: bob, friends with billy, talking to a fake server.
 const tick = (ms = 15) => new Promise(resolve => setTimeout(resolve, ms));
 const sent = { id: 'custom-sent1', title: 'From <b>her</b>', width: 2, height: 2, colors: ['#0088ff', '#ffee00'], pixels: [0, 1, 0, 1] };
-const signedIn = { 'little-jewel:account': JSON.stringify({ name: 'hanmo', token: 'tok', friends: ['anushka'] }) };
+const signedIn = { 'little-jewel:account': JSON.stringify({ name: 'bob', token: 'tok', friends: ['billy'] }) };
 function fakeServer({ messages = [], library = [], unread = 0 } = {}) {
   return (method, path, body) => {
     if (path.startsWith('/api/saves') && method === 'GET') return [200, { rev: 5, saves: [], library }];
     if (path === '/api/saves') return [200, { rev: 6, results: Object.fromEntries(body.saves.map(s => [s.puzzle, { rev: 6 }])), rejected: [] }];
     if (path.startsWith('/api/messages?') || path === '/api/messages') return method === 'GET'
       ? [200, { messages, puzzles: { [sent.id]: sent }, unread, start: true }]
-      : [201, { message: { id: 99, from: 'hanmo', to: 'anushka', kind: body.text ? 'text' : 'puzzle', text: body.text, puzzle: body.puzzle, client_id: body.client_id, at: 1 } }];
+      : [201, { message: { id: 99, from: 'bob', to: 'billy', kind: body.text ? 'text' : 'puzzle', text: body.text, puzzle: body.puzzle, client_id: body.client_id, at: 1 } }];
     if (path === '/api/messages/read') return [200, { unread: 0 }];
     if (path === '/api/logout') return [200, { ok: true }];
     return [404, {}];
@@ -257,25 +257,25 @@ function fakeServer({ messages = [], library = [], unread = 0 } = {}) {
 test('signed in: the corner shows the name, progress is the account’s own, and it syncs', async () => {
   const t = await mount({ stored: signedIn, server: fakeServer({ unread: 2 }) });
   await tick();
-  assert.equal(t.elements.accountButton.textContent, 'Hanmo');
+  assert.equal(t.elements.accountButton.textContent, 'Bob');
   assert.equal(t.elements.chatButton.hidden, false);
-  assert.equal(t.elements.chatLabel.textContent, 'Chat with Anushka');
+  assert.equal(t.elements.chatLabel.textContent, 'Chat with Billy');
   assert.equal(t.elements.unreadBadge.textContent, '2');
   t.elements.startGame.onclick();
   await t.tap(300, 100);
   t.elements.shelf.children[0].onclick();
   await t.settle();
   assert.equal(t.saves['interaction-test'].moves, 0, 'the guest save is untouched');
-  assert.equal(JSON.parse(t.store['little-jewel:hanmo:sorting-v2:interaction-test']).moves, 1);
-  assert.deepEqual(JSON.parse(t.store['little-jewel:hanmo:sync']).dirty, ['interaction-test'], 'noted for the next sync');
+  assert.equal(JSON.parse(t.store['little-jewel:bob:sorting-v2:interaction-test']).moves, 1);
+  assert.deepEqual(JSON.parse(t.store['little-jewel:bob:sync']).dirty, ['interaction-test'], 'noted for the next sync');
 });
 
 test('chat shows messages as text, never HTML, and a sent puzzle opens on tap; Menu returns to the chat', async () => {
   const attack = '<img src=x onerror=alert(1)>';
   const t = await mount({ stored: signedIn, server: fakeServer({
-    library: [{ puzzle: sent.id, art: sent, from: 'anushka', rev: 3, removed: false }],
-    messages: [{ id: 1, from: 'anushka', to: 'hanmo', kind: 'text', text: attack, client_id: 'a', at: 1 },
-      { id: 2, from: 'anushka', to: 'hanmo', kind: 'puzzle', puzzle: sent.id, client_id: 'b', at: 2 }] }) });
+    library: [{ puzzle: sent.id, art: sent, from: 'billy', rev: 3, removed: false }],
+    messages: [{ id: 1, from: 'billy', to: 'bob', kind: 'text', text: attack, client_id: 'a', at: 1 },
+      { id: 2, from: 'billy', to: 'bob', kind: 'puzzle', puzzle: sent.id, client_id: 'b', at: 2 }] }) });
   await tick();
   t.elements.chatButton.onclick();
   await tick();
@@ -285,7 +285,7 @@ test('chat shows messages as text, never HTML, and a sent puzzle opens on tap; M
   assert.equal(text.textContent, attack);
   assert.equal(items.some(li => JSON.stringify(li).includes('markup')), false, 'nothing in the chat is built from HTML');
   const card = items.flatMap(li => li.children).find(child => child.className === 'chat-card');
-  assert.equal(card.children[1].children[1].textContent, 'from Anushka · Not started');
+  assert.equal(card.children[1].children[1].textContent, 'from Billy · Not started');
   card.onclick();
   assert.equal(t.elements.game.hidden, false);
   t.elements.menu.onclick();
@@ -299,12 +299,12 @@ test('chat shows messages as text, never HTML, and a sent puzzle opens on tap; M
 
 test('puzzles sent to you show in Free play, and only your own can be picked to send', async () => {
   const mine = { ...sent, id: 'custom-mine1', title: 'Mine' };
-  const t = await mount({ stored: { ...signedIn, 'little-jewel:hanmo:custom-puzzles': JSON.stringify([mine]) },
-    server: fakeServer({ library: [{ puzzle: sent.id, art: sent, from: 'anushka', rev: 3, removed: false }] }) });
+  const t = await mount({ stored: { ...signedIn, 'little-jewel:bob:custom-puzzles': JSON.stringify([mine]) },
+    server: fakeServer({ library: [{ puzzle: sent.id, art: sent, from: 'billy', rev: 3, removed: false }] }) });
   await tick();
   t.elements.freePlay.onclick();
   assert.equal(t.elements.sentList.children.length, 1);
-  assert.match(t.elements.sentList.children[0].markup, /from Anushka/);
+  assert.match(t.elements.sentList.children[0].markup, /from Billy/);
   assert.match(t.elements.sentList.children[0].markup, /From &#60;b&#62;her/, 'titles are escaped');
   assert.equal(t.elements.puzzleList.children.length, 1);
   t.elements.chatButton.onclick();
@@ -318,35 +318,28 @@ test('puzzles sent to you show in Free play, and only your own can be picked to 
 test('signing in offers this browser’s guest progress, and moves it once', async () => {
   const solved = { board: [0, 1, 0, 1], shelf: Array(24).fill(-1), moves: 4, savedAt: 1 };
   const t = await mount({ saved: solved, server: (method, path, body) => path === '/api/login'
-    ? [200, { name: 'anushka', token: 'tok', friends: ['hanmo'] }] : fakeServer()(method, path, body) });
+    ? [200, { name: 'billy', token: 'tok', friends: ['bob'] }] : fakeServer()(method, path, body) });
   t.elements.accountButton.onclick();
-  t.elements.signInName.value = 'anushka'; t.elements.password.value = 'pw';
+  t.elements.signInName.value = 'billy'; t.elements.password.value = 'pw';
   const done = t.elements.signInForm.onsubmit({ preventDefault() {}, target: t.elements.signInForm });
   await tick();
-  assert.match(t.elements.modalContent.markup, /Add this browser’s progress \(1 puzzle\) to Anushka\?/);
+  assert.match(t.elements.modalContent.markup, /Add this browser’s progress \(1 puzzle\) to Billy\?/);
   t.elements.askYes.onclick(); t.elements.modal.onclose();
   await done;
   assert.equal(t.saves['interaction-test'], undefined, 'the guest copy is gone');
-  assert.equal(JSON.parse(t.store['little-jewel:anushka:sorting-v2:interaction-test']).moves, 4);
+  assert.equal(JSON.parse(t.store['little-jewel:billy:sorting-v2:interaction-test']).moves, 4);
   assert.ok(t.calls.some(c => c.method === 'PUT' && c.body.saves[0].puzzle === 'interaction-test'), 'and sent to the server');
-  assert.equal(t.elements.accountButton.textContent, 'Anushka');
+  assert.equal(t.elements.accountButton.textContent, 'Billy');
 });
 
-test('the old shared password is forgotten, and its saves are not offered to anyone but Anushka', async () => {
-  const solved = { board: [0, 1, 0, 1], shelf: Array(24).fill(-1), moves: 4, savedAt: 7 };
-  const t = await mount({ saved: solved, stored: { 'little-jewel:generator-password': 'old' }, server: (method, path, body) => path === '/api/login'
-    ? [200, { name: 'hanmo', token: 'tok', friends: ['anushka'] }] : fakeServer()(method, path, body) });
+test('a browser forgets the old shared password and the old shared-copy marker', async () => {
+  const t = await mount({ stored: { 'little-jewel:generator-password': 'old', 'little-jewel:shared-v91': '{"saves":{}}' } });
   assert.equal(t.store['little-jewel:generator-password'], undefined);
-  t.elements.accountButton.onclick();
-  t.elements.signInName.value = 'hanmo'; t.elements.password.value = 'pw';
-  await t.elements.signInForm.onsubmit({ preventDefault() {}, target: t.elements.signInForm });
-  assert.doesNotMatch(t.elements.modalContent.markup || '', /Add this browser/);
-  assert.equal(t.saves['interaction-test'].moves, 4, 'still there as guest progress');
-  assert.equal(t.store['little-jewel:hanmo:sorting-v2:interaction-test'], undefined);
+  assert.equal(t.store['little-jewel:shared-v91'], undefined);
 });
 
 test('signing out removes the account’s copy from this browser', async () => {
-  const t = await mount({ stored: { ...signedIn, 'little-jewel:hanmo:sorting-v2:interaction-test': '{}' }, server: fakeServer() });
+  const t = await mount({ stored: { ...signedIn, 'little-jewel:bob:sorting-v2:interaction-test': '{}' }, server: fakeServer() });
   await tick();
   t.elements.accountButton.onclick();
   await t.elements.signOutHere.onclick();
@@ -387,7 +380,7 @@ async function createFromHome(t, idea = 'a red ball') {
   for (let i = 0; i < 300 && !t.elements.candidates?.children.length; i++) await tick(10);
   assert.equal(t.elements.candidates.children.length, 2, 'one version per picture');
 }
-const made = t => JSON.parse(t.store['little-jewel:hanmo:custom-puzzles'] || '[]');
+const made = t => JSON.parse(t.store['little-jewel:bob:custom-puzzles'] || '[]');
 
 test('a guest who taps Create puzzle on the start screen is asked to sign in first', async () => {
   const t = await mount();

@@ -27,14 +27,11 @@ if ((location.hash || '').startsWith('#carry=')) {
   try { const carried = await unpackSaves(location.hash.slice(7)); withProfile(null, () => storeSnapshot(mergeSaves(snapshot(), carried, shipped()))); } catch {}
   history.replaceState(null, '', location.pathname + location.search);
 }
-// Before accounts, everyone with the password shared one copy of the saves, now Anushka's.
-// A browser that had the password remembers which of its saves were that copy, so they
-// are offered to Anushka at sign-in but not to anyone else.
-const SHARED = 'little-jewel:shared-v91', SHARED_OWNER = 'anushka';
-if (takeOldPassword()) {
-  const old = withProfile(null, snapshot);
-  try { localStorage.setItem(SHARED, JSON.stringify({ saves: Object.fromEntries(Object.entries(old.saves).map(([id, s]) => [id, s.savedAt ?? null])), custom: old.custom.map(a => a.id) })); } catch {}
-}
+// Before accounts, one shared password unlocked the game; its saves now live in account 1
+// on the server. A browser that still has that password forgets it, along with the marker
+// older versions kept of which saves were the shared copy.
+takeOldPassword();
+try { localStorage.removeItem('little-jewel:shared-v91'); } catch {}
 useProfile(currentAccount()?.name);
 const library = () => [...shipped(), ...customPuzzles()];
 let art, state, selection, total = 0, level = null, returnTo = null;
@@ -561,14 +558,9 @@ async function startAccount() {
   await offerGuestProgress();
 }
 // This browser's guest progress can move into the account, once, if the player says so.
-// The old shared copy (see SHARED) is offered only to its owner.
 async function offerGuestProgress() {
   const name = currentAccount()?.name, guest = withProfile(null, snapshot);
-  let shared = null;
-  try { shared = name === SHARED_OWNER ? null : JSON.parse(localStorage.getItem(SHARED)); } catch {}
-  const old = (id, save) => Boolean(shared?.saves && id in shared.saves && shared.saves[id] === (save.savedAt ?? null));
-  const saves = Object.entries(guest.saves).filter(([id, save]) => !old(id, save));
-  const custom = guest.custom.filter(a => !shared?.custom?.includes(a.id));
+  const saves = Object.entries(guest.saves), custom = guest.custom;
   const ids = [...new Set([...saves.map(([id]) => id), ...custom.map(a => a.id)])];
   if (!ids.length) return;
   if (!await ask(`Add this browser’s progress (${ids.length} puzzle${ids.length === 1 ? '' : 's'}) to ${displayName(name)}?`, 'Add it', 'Not now')) return;
@@ -579,7 +571,6 @@ async function offerGuestProgress() {
     if (!mine || jewelsHome(arts.get(id), save) > jewelsHome(arts.get(id), mine)) writeSave(id, save);
   }
   withProfile(null, () => forget(ids));
-  if (name === SHARED_OWNER) try { localStorage.removeItem(SHARED); } catch {}
   track('guest_progress_added', { puzzles: ids.length });
   await syncNow();
 }

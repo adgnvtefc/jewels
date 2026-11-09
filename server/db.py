@@ -89,7 +89,18 @@ CREATE TABLE chat_reads (
 );
 """
 # Each entry upgrades the schema by one version; SCHEMA above is version 1.
-UPGRADES: list[str] = []
+UPGRADES: list[str] = [
+    # 2: texts about unread messages. up_to is the newest message (by id) that the account
+    # was already texted about, or that came before texts existed, so it never texts twice.
+    # Existing accounts start at the newest message today: no texts about old ones.
+    """
+    CREATE TABLE chat_notices (
+      account_id INTEGER PRIMARY KEY REFERENCES accounts(id),
+      up_to      INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO chat_notices (account_id, up_to) SELECT id, (SELECT coalesce(max(id), 0) FROM messages) FROM accounts
+    """,
+]
 VERSION = 1 + len(UPGRADES)
 
 

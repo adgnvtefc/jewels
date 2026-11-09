@@ -17,6 +17,9 @@ everything but signing in and the health check needs `Authorization: Bearer <tok
     GET    /api/jobs/<id>                                -> status, then images
     GET    /api/health                                   -> {model: "ready" | "loading" | "error"}
 
+Texts about unread messages go out through textbot's notify service on this Mac
+(~/projects/textbot/notify.py), by account ID; textbot holds the phone numbers.
+
 Making a picture: one model call through orchestra's chat() turns an idea into one
 drawable subject (the prompt is agents/artist.md), Z-Image Turbo paints a few candidates,
 and the game converts the chosen picture into a puzzle in the browser.
@@ -48,6 +51,7 @@ load_dotenv((ROOT / os.environ.get("HARNESS_ENV", "../../harness/.env")).resolve
 import accounts  # noqa: E402  (after .env, so DB_FILE can come from it)
 import chat  # noqa: E402
 import saves  # noqa: E402
+import texts  # noqa: E402
 from db import Database  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8787"))
@@ -69,6 +73,9 @@ KEEP_JOBS = 30
 # Bold, flat, outlined icons on a plain background survive the trip down to 32x32.
 STYLE = ("flat vector icon style, bold simple shapes, thick dark outlines, at most 8 flat colors, "
          "no gradients, no text, plain solid light background")
+
+# Texts about unread chat messages (chat.due_notices has the rule; texts.py sends them).
+NOTICE_CHECK_SECONDS = 60
 
 db: Database | None = None
 jobs: dict[str, dict] = {}
@@ -330,6 +337,34 @@ class Handler(BaseHTTPRequestHandler):
         print(f"{self.address_string()} {format % args}", flush=True)
 
 
+def send_notices(now: int | None = None) -> int:
+    """One check: text everyone who is due, once each. Never raises; returns how many were sent."""
+    if not texts.token():  # no token: texts are off
+        return 0
+    sent = 0
+    for notice in chat.due_notices(db, now):
+        who = notice["account_id"]
+        # Marked before sending: one try per message, even if textbot is down or answers 404/429.
+        chat.mark_noticed(db, who, notice["up_to"])
+        try:
+            texts.text_player(who, notice["text"])
+            sent += 1
+            print(f"texted account {who} about unread messages", flush=True)
+        except Exception as error:  # textbot not running, timed out, 404, 429, anything
+            print(f"text to account {who} not sent: {texts.why(error)}", flush=True)
+    return sent
+
+
+def notice_loop() -> None:
+    """Runs in the background: checks for due texts once a minute."""
+    while True:
+        time.sleep(NOTICE_CHECK_SECONDS)
+        try:
+            send_notices()
+        except Exception:  # e.g. the database was busy: try again next minute
+            traceback.print_exc()
+
+
 def main() -> None:
     global db
     db = Database()
@@ -339,6 +374,9 @@ def main() -> None:
     threading.Thread(target=db.back_up_daily, daemon=True).start()
     if USE_MODEL:
         threading.Thread(target=worker, daemon=True).start()
+    if texts.token():
+        threading.Thread(target=notice_loop, daemon=True).start()
+    print(f"texts about unread messages: {'on' if texts.token() else 'off (no TEXTBOT_NOTIFY_TOKEN)'}", flush=True)
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"Pixel Game server on http://127.0.0.1:{PORT} (agent={'on' if USE_AGENT else 'off'}, data={db.path})", flush=True)
     server.serve_forever()

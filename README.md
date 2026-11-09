@@ -60,21 +60,41 @@ Accounts are invite-only: they are added on the Mac, and there is no sign-up pag
 
 - **Signing in** gives the browser a random token, kept in localStorage as `little-jewel:account`; the password is never stored in the browser. The server keeps only scrypt hashes of passwords and SHA-256 hashes of tokens. A token lasts 90 days from its last use, and an account can be signed in on at most 10 browsers. After 20 wrong passwords in 10 minutes, the server refuses all sign-ins for a while; there is no per-account lock.
 - **Separate progress.** A signed-in account's saves and puzzles live under `little-jewel:<name>:…` in the browser; a guest's stay under the older `little-jewel:…` keys. The first sign-in in a browser with guest progress asks whether to add it to the account; if yes, it moves over (furthest progress wins per puzzle) and the guest copy is cleared.
-- **The old shared password.** Before accounts, everyone with one password shared a single copy of the saves; it now belongs to Anushka's account. A browser that had the password forgets it on its first visit and remembers which of its saves were that shared copy (`little-jewel:shared-v91`), so they are offered to Anushka at sign-in but not to anyone else.
+- **The old shared password.** Before accounts, everyone with one password shared a single copy of the saves; it was moved into account 1 on the server (see `server/migrate_v91.py`). A browser that still has the password forgets it on its next visit. Any copy of the old saves left in such a browser is treated like any other guest progress: whoever signs in there is asked whether to add it, and can say Not now.
 - **Signing out** sends any unsent progress, ends the session on the server (or every session, with Sign out everywhere), and removes the account's copy from the browser. If progress couldn't be sent, it asks first. When a sign-in runs out, the game keeps everything and the corner button says **Sign in again**.
 - **Chat.** The chat screen shows the conversation, a message box, and 🧩 to send a puzzle. Messages are kept forever; scrolling up loads older ones back to the first. The game checks for new messages every 3 seconds while the chat is open, every minute otherwise, and not while the page is hidden; the latest 200 are cached in the browser. Messages are always shown as text, never as HTML, and links aren't clickable. Up to 1,000 characters each, and 30 a minute.
 - **Sending puzzles.** Only puzzles you made can be sent. The 🧩 picker lists them, plus **✦ Create puzzle**, which opens the create pop-up; once saved, the new puzzle is in the 🧩 list to send. The friend gets a card in the chat and the puzzle in Free play under Sent to you; tapping the card opens it (and Menu returns to the chat). When they first finish it, the chat shows "… finished it in N moves" to both of you. Only finishing is shared, not partial progress.
-- **No push notifications.** New messages show as a count on the Chat button and in the tab title.
+- **Notifications.** New messages show as a count on the Chat button and in the tab title. Messages left unread get one text message (see below); there are no push notifications.
 
 Accounts and friends are managed on the Mac, with passwords typed at a hidden prompt (never on a command line or in a file):
 
 ```bash
 cd server
-.venv/bin/python accounts.py add anushka
-.venv/bin/python accounts.py befriend anushka hanmo
-.venv/bin/python accounts.py set-password anushka    # also signs her out everywhere
-.venv/bin/python accounts.py list
+.venv/bin/python accounts.py add billy
+.venv/bin/python accounts.py befriend billy bob
+.venv/bin/python accounts.py set-password billy    # also signs them out everywhere
+.venv/bin/python accounts.py list                    # each line starts with the account's ID
 ```
+
+Every account has a permanent number, its **account ID** (billy is 1, bob is 2), which `accounts.py list` shows. textbot's `contacts.json` maps these IDs to phone numbers (see [Texts about unread messages](#texts-about-unread-messages)). **Caveat:** the ID is SQLite's row number, and SQLite can hand the highest one out again if that account is deleted and another added. There is no delete command, but if an account is ever removed by hand, fix textbot's `contacts.json` before adding the next one, or the new account would get texts meant for the old one's phone.
+
+### Texts about unread messages
+
+Ten minutes after the newest message to you, if you still have unread messages, the server texts you once: "You have unread messages from Bob in Pixel Game". It never includes the messages themselves. After that, nothing more until a newer message arrives, which starts the 10 minutes again. Reading the chat within the 10 minutes means no text. Sent puzzles and "finished it" notices count as messages.
+
+- **Who sends it:** jewels decides when (only it knows who has read what), and textbot's notify service on the Mac (`~/projects/textbot/notify.py`, `POST http://127.0.0.1:8765/notify`) sends the iMessage. jewels sends only the **account ID** and the text; the phone numbers live only in textbot's `contacts.json`, under `jewels`, keyed by account ID (`"2"` for bob). An account with no entry there gets no texts (textbot answers 404).
+- **How:** a background thread in `server.py` checks once a minute (`chat.due_notices` has the rule). `chat_notices.up_to` remembers the newest message already handled, in the database, so a restart never texts twice. Each message gets one try: if textbot is down or answers 404 or 429, the server logs it and moves on, and the chat itself never waits on textbot.
+- **Texting anything yourself:** `server/texts.py` sends any text (up to 300 characters) to any accounts, by ID, or to all of them. It checks everything first (unknown IDs, length, the token), so a mistake sends nothing, then texts each account and prints how each one went. One failing (say, no phone number in textbot for that ID) doesn't stop the rest. In code, it's `texts.send_text(db, text, [2])` or `texts.send_text(db, text, "all")`.
+
+  ```bash
+  cd server
+  .venv/bin/python texts.py "New puzzles are up!" all
+  .venv/bin/python texts.py "Dinner's ready" 2
+  .venv/bin/python texts.py "Hi, both of you" 1 2
+  ```
+
+  It exits with 0 if every text went out, 1 if any didn't, and 2 if nothing was sent because of a mistake. textbot texts each person at most once every 5 minutes, counting the unread-message texts too.
+- **Setup:** `TEXTBOT_NOTIFY_TOKEN` in `server/.env` is textbot's `NOTIFY_TOKEN_JEWELS`. Without it, texts are off and the server says so when it starts. Messages from before texts existed never cause one.
 
 ## The server
 
@@ -106,7 +126,7 @@ Each account's progress is one row per puzzle in the database, with a revision n
 - **Made puzzles** are checked before they are stored, since they are drawn in other people's browsers: 32 × 32, valid pixels, 2–16 `#rrggbb` colors each used at least once, and a title of up to 200 characters.
 - **Backups:** each time the server starts, and once a day, it copies the whole database to `server/data/backups/jewels-YYYY-MM-DD.db` and keeps the last 30. A schema upgrade first saves `jewels-before-v<N>.db`. The backups cover saves, puzzles and chat together. They stay on the Mac; if its disk fails, they go with it.
 
-The shared saves from before accounts were moved into Anushka's account with `server/migrate_v91.py`; the original file is kept as `server/data/saves-v91.json`.
+The shared saves from before accounts were moved into Billy's account with `server/migrate_v91.py`; the original file is kept as `server/data/saves-v91.json`.
 
 **Known weakness:** browsers allow about 5 MB of localStorage, and one `PUT` is limited to 2 MB and 300 saves (the rest go in the next sync). A browser holding hundreds of made puzzles could reach the localStorage limit.
 

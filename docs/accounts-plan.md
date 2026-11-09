@@ -7,19 +7,19 @@ No password ever goes in this file or anywhere in the repo (it is public).
 
 | # | Decision | Approved |
 |---|----------|----------|
-| 1 | Two invite-only accounts, `hanmo` and `anushka`. No sign-up page; accounts are added on the Mac. | 2026-11-05 |
+| 1 | Two invite-only accounts, `bob` and `billy`. No sign-up page; accounts are added on the Mac. | 2026-11-05 |
 | 2 | An account is needed to create puzzles (the generator), sync, chat and send puzzles. | 2026-11-05 |
 | 3 | Each account has its own progress. | 2026-11-05 |
 | 4 | The two are each other's only friends. Chat between friends. | 2026-11-05 |
 | 5 | Friends can send each other puzzles (made ones, levels and bonus ones). | 2026-11-05 |
-| 6 | **Anushka owns the current shared progress** (server copy v91: 41 saves, 16 made puzzles). | 2026-11-05 |
+| 6 | **Billy owns the current shared progress** (server copy v91: 41 saves, 16 made puzzles). | 2026-11-05 |
 | 7 | **Guests can play without an account**; their progress stays in that browser only. | 2026-11-05 |
 | 8 | **Back up saves and chat on the server.** | 2026-11-05 |
-| 9 | **Show puzzle completion** in chat ("Anushka finished your puzzle in 64 moves"). | 2026-11-05 |
+| 9 | **Show puzzle completion** in chat ("Billy finished your puzzle in 64 moves"). | 2026-11-05 |
 | 10 | **SQLite** (`server/data/jewels.db`, Python's built-in `sqlite3`) is the database. | 2026-11-05 |
 | 11 | **Sign-in and sessions as described below.** No per-account lock; only the overall limit. | 2026-11-05 |
 | 12 | Signing out sends unsent saves, then removes that account's progress from the browser. | 2026-11-05 |
-| 13 | Saves on browsers that used the old shared password are Anushka's: offered to her at sign-in, not to Hanmo. | 2026-11-05 |
+| 13 | Saves on browsers that used the old shared password are Billy's: offered to Billy at sign-in, not to Bob. Removed 2026-11-09 once the migration was long done; such saves are now ordinary guest progress. | 2026-11-05 |
 | 14 | **Chat and sending puzzles as described below.** | 2026-11-05 |
 | 15 | Chat history is kept forever, and you can scroll back to the very first message. | 2026-11-05 |
 | 16 | Tapping a puzzle in chat (a sent puzzle or a completion notice) opens that puzzle. | 2026-11-05 |
@@ -42,22 +42,22 @@ Carried over from the sketch (not objected to):
 
 | Part | Where | Notes |
 |------|-------|-------|
-| Game page | `/Users/hanmozhang/projects/jewels/index.html`, `style.css`, `app.js` | Served by GitHub Pages at https://momoswebsiteofthehour.com |
-| Game rules | `/Users/hanmozhang/projects/jewels/game.js` | `restore`, `correctCount`, the save shape `{board, shelf, moves, selectedColor, savedAt}` |
-| Puzzle list, browser saves, merge | `/Users/hanmozhang/projects/jewels/library.js` | localStorage keys below; `snapshot`, `mergeSaves`, `storeSnapshot` |
-| Talking to the Mac | `/Users/hanmozhang/projects/jewels/generator.js` | Password in localStorage, `fetchSaves`/`sendSaves`, `generate` |
-| Picture → puzzle | `/Users/hanmozhang/projects/jewels/convert.js` | Runs in the browser |
-| Shipped puzzles | `/Users/hanmozhang/projects/jewels/assets/puzzles.json`, `bonus.json`, `assets/puzzles/*.json` | Never stored on the server |
-| Deploy | `/Users/hanmozhang/projects/jewels/.github/workflows/pages.yml` | Runs `npm test`, copies the listed files and `assets/` |
-| Server | `/Users/hanmozhang/projects/jewels/server/server.py` | stdlib `ThreadingHTTPServer` on 127.0.0.1:8787 |
-| Server secrets | `/Users/hanmozhang/projects/jewels/server/.env` (not committed) | `JEWELS_PASSWORD`, optional `SAVES_FILE` etc. |
-| Artist prompt | `/Users/hanmozhang/projects/jewels/server/agents/artist.md` | Called through orchestra `chat()` |
-| Saves on the server | `/Users/hanmozhang/projects/jewels/server/data/saves.json` (not committed) | One shared copy, `{version, data: {saves, custom, removed}}`, ~255 KB |
-| Server log | `/Users/hanmozhang/projects/jewels/server/logs/launchd.log` | |
-| Always-on service | `/Users/hanmozhang/Library/LaunchAgents/com.little-jewel.generator.plist` | Runs `server/.venv/bin/python server/server.py` under `caffeinate` |
+| Game page | `~/projects/jewels/index.html`, `style.css`, `app.js` | Served by GitHub Pages at https://momoswebsiteofthehour.com |
+| Game rules | `~/projects/jewels/game.js` | `restore`, `correctCount`, the save shape `{board, shelf, moves, selectedColor, savedAt}` |
+| Puzzle list, browser saves, merge | `~/projects/jewels/library.js` | localStorage keys below; `snapshot`, `mergeSaves`, `storeSnapshot` |
+| Talking to the Mac | `~/projects/jewels/generator.js` | Password in localStorage, `fetchSaves`/`sendSaves`, `generate` |
+| Picture → puzzle | `~/projects/jewels/convert.js` | Runs in the browser |
+| Shipped puzzles | `~/projects/jewels/assets/puzzles.json`, `bonus.json`, `assets/puzzles/*.json` | Never stored on the server |
+| Deploy | `~/projects/jewels/.github/workflows/pages.yml` | Runs `npm test`, copies the listed files and `assets/` |
+| Server | `~/projects/jewels/server/server.py` | stdlib `ThreadingHTTPServer` on 127.0.0.1:8787 |
+| Server secrets | `~/projects/jewels/server/.env` (not committed) | `JEWELS_PASSWORD`, optional `SAVES_FILE` etc. |
+| Artist prompt | `~/projects/jewels/server/agents/artist.md` | Called through orchestra `chat()` |
+| Saves on the server | `~/projects/jewels/server/data/saves.json` (not committed) | One shared copy, `{version, data: {saves, custom, removed}}`, ~255 KB |
+| Server log | `~/projects/jewels/server/logs/launchd.log` | |
+| Always-on service | `~/Library/LaunchAgents/com.little-jewel.generator.plist` | Runs `server/.venv/bin/python server/server.py` under `caffeinate` |
 | Public address | Tailscale Funnel `https://hanmos-mac-studio.tail6c4683.ts.net` | `/` → 127.0.0.1:8787 (this server), `/catseye` → 127.0.0.1:8790 (analytics) |
-| Model call records | `/Users/hanmozhang/.orchestra/jewels/log/<day>.jsonl` | Written by orchestra |
-| Tests | `/Users/hanmozhang/projects/jewels/*.test.js` | `node --test`; no server tests yet |
+| Model call records | `~/.orchestra/jewels/log/<day>.jsonl` | Written by orchestra |
+| Tests | `~/projects/jewels/*.test.js` | `node --test`; no server tests yet |
 
 Browser storage today (all in localStorage):
 
@@ -79,7 +79,7 @@ Settings: `journal_mode=WAL`, `foreign_keys=ON`, `busy_timeout=5000`. Schema ver
 ```sql
 CREATE TABLE accounts (
   id            INTEGER PRIMARY KEY,
-  name          TEXT NOT NULL UNIQUE,     -- sign-in name: 'hanmo', 'anushka'
+  name          TEXT NOT NULL UNIQUE,     -- sign-in name: 'bob', 'billy'
   password_hash TEXT NOT NULL,            -- scrypt$n$r$p$salt$hash
   rev           INTEGER NOT NULL DEFAULT 0, -- bumps on any change to this account's saves or library
   created_at    INTEGER NOT NULL          -- all times are unix milliseconds
@@ -179,8 +179,8 @@ When a save first reaches `home = total`, the server sets `finished_at`. If that
 
 - Hashed with `hashlib.scrypt` (built into Python): n = 2^15, r = 8, p = 1, a random 16-byte salt, 32-byte result. Stored as `scrypt$15$8$1$<salt>$<hash>` in `accounts.password_hash`.
 - Checked with `hmac.compare_digest`. An unknown name is checked against a dummy hash, so a wrong name and a wrong password take the same time and get the same reply: "That name and password don't match."
-- Names are trimmed and lowercased, so "Anushka " works.
-- Passwords are set on the Mac only, typed at a hidden prompt (`server/.venv/bin/python server/accounts.py set-password anushka`). Never in the repo, `.env`, shell history or a command line. Setting a password signs that account out everywhere.
+- Names are trimmed and lowercased, so "Billy " works.
+- Passwords are set on the Mac only, typed at a hidden prompt (`server/.venv/bin/python server/accounts.py set-password billy`). Never in the repo, `.env`, shell history or a command line. Setting a password signs that account out everywhere.
 
 ### Guessing limits (in memory, like today)
 
@@ -211,7 +211,7 @@ When a save first reaches `home = total`, the server sets `finished_at`. If that
 
 ### Guest progress at sign-in
 
-- If this browser has guest progress, after signing in: "Add this browser's progress (12 puzzles) to hanmo?"
+- If this browser has guest progress, after signing in: "Add this browser's progress (12 puzzles) to bob?"
 - Yes: guest saves go into the account (furthest progress wins per puzzle) and the guest copy is cleared, so it can't be added to a second account.
 - Not now: the guest copy stays and can be played again after signing out.
 
@@ -231,11 +231,13 @@ When a save first reaches `home = total`, the server sets `finished_at`. If that
 
 ### Old-password browsers
 
-Browsers that used the shared password hold copies of the shared progress, which now belongs to Anushka. On first load after the change, a browser that still has `little-jewel:generator-password` marks its existing saves as the old shared copy (`little-jewel:shared-v91` = true) and deletes the password.
+Browsers that used the shared password hold copies of the shared progress, which now belongs to Billy. On first load after the change, a browser that still has `little-jewel:generator-password` marks its existing saves as the old shared copy (`little-jewel:shared-v91` = true) and deletes the password.
 
-- Anushka signs in there: the offer to add them works as for any guest progress (it is her progress anyway).
-- Hanmo signs in there: no offer. The old saves stay as guest saves.
+- Billy signs in there: the offer to add them works as for any guest progress (it is Billy's progress anyway).
+- Bob signs in there: no offer. The old saves stay as guest saves.
 - Guest progress made after the change is offered as usual.
+
+Removed on 2026-11-09: the shared progress had been in Billy's account on the server since 2026-11-05, so a browser now only forgets the old password (and any `little-jewel:shared-v91` marker), and old saves left in it are offered like any guest progress.
 
 ## Chat and sending puzzles (approved)
 
@@ -278,26 +280,26 @@ When a signed-in player picks one of the generated pictures, the game also sends
 - Only puzzles you made can be sent. Levels, bonus puzzles and puzzles sent to you can't.
 - Ways to send:
   - "Send a puzzle" in chat opens a picker of the puzzles you made, as thumbnails, newest first.
-  - "Send to Anushka" on the screen that opens after picking a generated picture.
+  - "Send to Billy" on the screen that opens after picking a generated picture.
 - `POST /api/messages {to, puzzle, client_id}`. The server checks that the sender made the puzzle (`puzzles.creator_id`) and hasn't removed it.
 - In the same transaction, the puzzle is added to the friend's `library` with `from_id` set to the sender. If the friend had removed it, it comes back.
 
 ### The puzzle card in chat
 
-- Thumbnail, title and "from hanmo".
+- Thumbnail, title and "from bob".
 - The whole card is tappable and opens the puzzle (the receiver gets it back in Free play first if they had removed it).
 - For the receiver: their own progress on it (Not started / 45% / Finished).
-- For the sender: "Sent", and later "Anushka finished it in 64 moves". Tapping opens the sender's own copy.
+- For the sender: "Sent", and later "Billy finished it in 64 moves". Tapping opens the sender's own copy.
 
 ### Completion notices
 
 - As in the database section: the first time the receiver finishes a puzzle that reached them in a `puzzle` message, the server adds one `finished` message to the sender.
-- Shown as a line with a small thumbnail: "Anushka finished Ghosts in love in 64 moves." Tapping it opens that puzzle.
+- Shown as a line with a small thumbnail: "Billy finished Ghosts in love in 64 moves." Tapping it opens that puzzle.
 - Only completion is shared, not partial progress.
 
 ### Free play
 
-- New section "Sent to you", between Bonus and Your puzzles. Each card says "from hanmo".
+- New section "Sent to you", between Bonus and Your puzzles. Each card says "from bob".
 - Removing a received puzzle from Free play hides it (`library.removed_at`). Its chat card still works, and tapping it brings the puzzle back.
 - If the maker deletes a puzzle they made, the receiver keeps it. A `puzzles` row is never deleted while any library row or message refers to it.
 
@@ -309,7 +311,7 @@ When a signed-in player picks one of the generated pictures, the game also sends
 
 ### The chat screen
 
-- Its own screen (like the game board, not a pop-up): a top bar with "‹ Back" and Anushka's name, the messages, then a text box with Send and a puzzle button.
+- Its own screen (like the game board, not a pop-up): a top bar with "‹ Back" and Billy's name, the messages, then a text box with Send and a puzzle button.
 - Opening a puzzle from chat and then pressing Menu returns to the chat.
 - On phones the text box stays above the on-screen keyboard (`visualViewport`).
 
@@ -368,18 +370,18 @@ server/server.py on 127.0.0.1:8787 (LaunchAgent com.little-jewel.generator)
 
 ### Files that would change or appear
 
-Server (`/Users/hanmozhang/projects/jewels/server/`):
+Server (`~/projects/jewels/server/`):
 
 - `db.py` (new): open the database, create and upgrade the schema, backups.
-- `accounts.py` (new): scrypt hashing, sessions, sign-in limits; also a command-line tool to add an account or set a password, typed at a hidden prompt on the Mac, e.g. `python accounts.py set-password hanmo`.
+- `accounts.py` (new): scrypt hashing, sessions, sign-in limits; also a command-line tool to add an account or set a password, typed at a hidden prompt on the Mac, e.g. `python accounts.py set-password bob`.
 - `saves.py` (new): the per-puzzle rule, the Python `restore`/`correctCount`, puzzle validation.
 - `chat.py` (new): messages, reads, completion notices.
 - `server.py`: routes only; the generator stays here.
-- `migrate_v91.py` (new, run once): moves `data/saves.json` into Anushka's rows.
+- `migrate_v91.py` (new, run once): moves `data/saves.json` into Billy's rows.
 - `test_server.py` (new): sign-in, tokens, saves rule, chat, validation, against a throwaway database.
 - `.env.example`: drop `JEWELS_PASSWORD`; `SAVES_FILE` becomes `DB_FILE`.
 
-Browser (`/Users/hanmozhang/projects/jewels/`):
+Browser (`~/projects/jewels/`):
 
 - `account.js` (new, takes over the server calls in `generator.js`): sign-in, token, API calls.
 - `chat.js` (new): chat screen, polling, puzzle cards.
@@ -393,8 +395,8 @@ Unchanged: `game.js`, `convert.js`, `assets/`, the Funnel, the LaunchAgent (rest
 ## Moving existing data
 
 1. Back up `server/data/saves.json`, then keep it as `server/data/saves-v91.json` (read-only).
-2. `migrate_v91.py` creates the two accounts (passwords typed at the prompt), the friendship, then for Anushka: 16 made puzzles into `puzzles` and `library`, 41 saves into `saves` with `home` worked out.
-3. Hanmo starts with no server progress.
+2. `migrate_v91.py` creates the two accounts (passwords typed at the prompt), the friendship, then for Billy: 16 made puzzles into `puzzles` and `library`, 41 saves into `saves` with `home` worked out.
+3. Bob starts with no server progress.
 4. Browsers holding the old password are signed out and asked to sign in once. Their local saves stay as guest saves and are offered to the account on sign-in.
 
 ## Backups
@@ -406,7 +408,7 @@ Unchanged: `game.js`, `convert.js`, `assets/`, the Funnel, the LaunchAgent (rest
 
 ## Open questions
 
-- None.
+- Account IDs (`accounts.id`) are SQLite row numbers and can be reused: deleting the account with the highest ID and adding a new one gives the new one that ID. textbot's `contacts.json` maps account IDs to phone numbers, so a reused ID would text the old account's phone. There is no delete command today; if one is ever added, either switch `accounts` to `AUTOINCREMENT` (a table rebuild) or add a random ID column for textbot to use.
 
 ## Change log
 
@@ -419,3 +421,4 @@ Unchanged: `game.js`, `convert.js`, `assets/`, the Funnel, the LaunchAgent (rest
 - 2026-11-05: No off-Mac backups for now (decision 19).
 - 2026-11-05: Per-puzzle saves, schema and API approved (decisions 20–22). Design complete.
 - 2026-11-05: Built. Server: `db.py`, `accounts.py`, `saves.py`, `chat.py`, `migrate_v91.py`, `test_server.py` (21 tests). Browser: `account.js`, `sync.js`, `chat.js`, changes to `library.js`, `app.js`, `index.html`, `style.css` (37 tests). Small additions: `USE_MODEL=0` for testing without the picture model; a new sent or finished puzzle in chat triggers a save sync so cards show current progress. Checked in the preview against a throwaway server.
+- 2026-11-09: Texts about unread messages through textbot, by account ID (`chat_notices`, schema 2). Player names in this doc replaced with Billy (account 1) and Bob (account 2). The old-password owner check (decision 13) removed.

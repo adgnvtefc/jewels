@@ -14,6 +14,7 @@ from db import Database, now_ms
 MAX_TEXT = 1000
 PAGE = 50
 MAX_NEW = 200
+NOTICE_AFTER_MS = 10 * 60 * 1000  # a text goes out this long after the last message, if still unread
 PER_MINUTE = 30
 CLIENT_ID = re.compile(r"[A-Za-z0-9_-]{8,64}")
 # Control characters other than line breaks (and tabs) are dropped.
@@ -154,3 +155,35 @@ def mark_read(db: Database, account_id: int, data: dict) -> tuple[int, dict]:
                      "ON CONFLICT (account_id, friend_id) DO UPDATE SET last_read_id = max(last_read_id, excluded.last_read_id)",
                      (account_id, friend, up_to))
     return 200, {"unread": unread(db, account_id)}
+
+
+# Texts about unread messages (sent by server.py through textbot). The rule: 10 minutes
+# after the newest message to you, if you still have unread messages, one text. Then no
+# more until a newer message arrives. chat_notices.up_to remembers the newest message id
+# already handled; message ids are AUTOINCREMENT, so they are never reused.
+def due_notices(db: Database, now: int | None = None) -> list[dict]:
+    """Who should get a text now: [{account_id, up_to, text}]. Reads only; sends nothing."""
+    now = now_ms() if now is None else now
+    rows = db.read(
+        "SELECT m.to_id AS account_id, max(m.id) AS newest, max(m.created_at) AS last_at "
+        "FROM messages m LEFT JOIN chat_notices n ON n.account_id = m.to_id "
+        "GROUP BY m.to_id HAVING newest > coalesce(max(n.up_to), 0) AND last_at <= ?",
+        (now - NOTICE_AFTER_MS,))
+    due = []
+    for row in rows:
+        senders = db.read(
+            "SELECT DISTINCT a.name FROM messages m JOIN accounts a ON a.id = m.from_id "
+            "LEFT JOIN chat_reads r ON r.account_id = m.to_id AND r.friend_id = m.from_id "
+            "WHERE m.to_id = ? AND m.id > coalesce(r.last_read_id, 0) ORDER BY a.name", (row["account_id"],))
+        if senders:  # everything was read in time: nothing to say
+            names = " and ".join(r["name"][:1].upper() + r["name"][1:] for r in senders)
+            due.append({"account_id": row["account_id"], "up_to": row["newest"],
+                        "text": f"You have unread messages from {names} in Pixel Game"})
+    return due
+
+
+def mark_noticed(db: Database, account_id: int, up_to: int) -> None:
+    """Remember that messages up to this id were handled, so they never cause another text."""
+    with db.transaction() as conn:
+        conn.execute("INSERT INTO chat_notices (account_id, up_to) VALUES (?, ?) "
+                     "ON CONFLICT (account_id) DO UPDATE SET up_to = max(up_to, excluded.up_to)", (account_id, up_to))

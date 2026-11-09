@@ -5,9 +5,9 @@ the database keeps only the token's SHA-256, so a copy of the database can't sig
 
 Accounts are added on the Mac, never through the web (passwords are typed at a hidden prompt):
 
-    .venv/bin/python accounts.py add anushka
-    .venv/bin/python accounts.py set-password anushka     # also signs her out everywhere
-    .venv/bin/python accounts.py befriend anushka hanmo
+    .venv/bin/python accounts.py add billy
+    .venv/bin/python accounts.py set-password billy     # also signs them out everywhere
+    .venv/bin/python accounts.py befriend billy bob
     .venv/bin/python accounts.py list
 """
 
@@ -172,7 +172,7 @@ def main(argv: list[str]) -> None:
         case ["list"]:
             for row in db.read("SELECT id, name FROM accounts ORDER BY id"):
                 sessions = db.one("SELECT count(*) FROM sessions WHERE account_id = ?", (row["id"],))[0]
-                print(f"{row['name']}: friends {', '.join(friends_of(db, row['id'])) or '-'}; {sessions} signed-in devices")
+                print(f"{row['id']} {row['name']}: friends {', '.join(friends_of(db, row['id'])) or '-'}; {sessions} signed-in devices")
         case _:
             raise SystemExit(__doc__)
 

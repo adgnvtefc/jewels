@@ -1,6 +1,6 @@
 """One-time move of the old shared saves (data/saves.json) into one account.
 
-    .venv/bin/python migrate_v91.py anushka [data/saves.json]
+    .venv/bin/python migrate_v91.py billy [data/saves.json]
 
 Run it after adding the accounts (accounts.py). It copies saves.json to saves-v91.json
 first and never changes or deletes the original. It refuses to run twice.
