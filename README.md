@@ -54,6 +54,15 @@ How it works:
 3. Z-Image Turbo (mflux, 4-bit) paints four 512 px candidates in a flat-icon style, about 2.5 s each.
 4. The browser turns each picture into puzzle art with `convert.js`: it picks a palette in OKLab at 128 × 128, crops to the subject, shrinks to 32 × 32 by majority vote, and removes isolated pixels.
 
+### The Create puzzle test
+
+To learn which pictures make better puzzles, the server can split each Create puzzle in half (`CREATE_TEST=1` in `server/.env`; off by default, and then all four come from the artist):
+
+- **Top two, "today":** painted from the artist's subject, converted as usual.
+- **Bottom two, "typed":** painted from the player's words exactly as typed, with the same style line, and converted with the lighter, feature-keeping conversion (`LIGHTER` in `convert.js`). It removes soft line edges instead of letting them become colors, thins a thick outline to one jewel, keeps at least one jewel for each small feature that clearly differs from its surroundings (an eye, a seed), and keeps lone pixels that contrast strongly. Its options are all off by default, so other conversions are unchanged.
+
+Each pick is recorded with its half (`llm_pick` and `made_puzzle` carry `variant: "today"` or `"typed"`), and the server keeps each job's four pictures and prompts in `server/data/create-test/<job>/` (not in git) to compare side by side. The top half always comes first, so it may get a few extra picks just for being first.
+
 ## Accounts and chat
 
 Accounts are invite-only: they are added on the Mac, and there is no sign-up page. Each account has its own progress and puzzles. Friends (set on the Mac too) can chat and send each other puzzles.

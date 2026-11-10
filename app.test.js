@@ -21,7 +21,7 @@ const picture = new Uint8ClampedArray(64 * 64 * 4).map((_, i) => {
 const art = { id: 'interaction-test', width: 2, height: 2,
   colors: ['#0088ff', '#ffee00'], pixels: [0, 1, 0, 1] };
 async function mount({ location = { search: '', hostname: 'example.test' }, history = {}, wait = true, levels = 1, bonus = 0,
-  saved: initial = { board: [1, 0, 1, 0], shelf: Array(24).fill(-1), moves: 0 }, stored = {}, server = () => [404, {}], confirm = () => true, navigator } = {}) {
+  saved: initial = { board: [1, 0, 1, 0], shelf: Array(24).fill(-1), moves: 0 }, stored = {}, server = () => [404, {}], confirm = () => true, navigator, catseye } = {}) {
   // One save per puzzle; level 1 is `art`, and further levels are copies of it under their own ids.
   const saves = { [art.id]: initial }, saved = () => saves[art.id];
   const ctx = new Proxy({}, {
@@ -60,7 +60,7 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
   })()`, {
     game, console, window: { devicePixelRatio: 1 },
     document: { getElementById: id => elements[id] ?? null, createElement: element, body: element(), visibilityState: 'visible', addEventListener() {} },
-    confirm, navigator,
+    confirm, navigator, catseye,
     Image: class { naturalWidth = 64; naturalHeight = 64; decode() { return Promise.resolve(); } },
     fetch: async (url, options = {}) => url.includes('/api/') ? (() => {
       const path = url.slice(url.indexOf('/api/')), body = options.body ? JSON.parse(options.body) : undefined;
@@ -363,11 +363,11 @@ test('on an iPhone, the Add to Home Screen hint shows once, and never in the Hom
 });
 
 // The create pop-up, from the start screen: idea → four versions → Play now, Save or Try again.
-function painter(jobs = { n: 0 }) {
+function painter(jobs = { n: 0 }, variants) {
   const server = fakeServer();
   return (method, path, body) => {
     if (path === '/api/jobs' && method === 'POST') { jobs.n++; jobs.prompt = body.prompt; return [202, { id: `j${jobs.n}` }]; }
-    if (path.startsWith('/api/jobs/')) return [200, { status: 'done', subject: 'a red ball', images: ['data:a', 'data:b'], seconds: 5 }];
+    if (path.startsWith('/api/jobs/')) return [200, { status: 'done', subject: 'a red ball', images: variants ? variants.map(v => `data:${v}`) : ['data:a', 'data:b'], variants, seconds: 5 }];
     if (path === '/api/puzzles') return [201, { ok: true }];
     return server(method, path, body);
   };
@@ -378,7 +378,7 @@ async function createFromHome(t, idea = 'a red ball') {
   t.elements.prompt.value = idea;
   t.elements.createForm.onsubmit({ preventDefault() {} });
   for (let i = 0; i < 300 && !t.elements.candidates?.children.length; i++) await tick(10);
-  assert.equal(t.elements.candidates.children.length, 2, 'one version per picture');
+  assert.ok(t.elements.candidates.children.length >= 2, 'one version per picture');
 }
 const made = t => JSON.parse(t.store['little-jewel:bob:custom-puzzles'] || '[]');
 
@@ -435,4 +435,21 @@ test('Create puzzle: Try again throws the version away and paints the same idea 
   assert.equal(jobs.n, 2);
   t.elements.modal.close(); t.elements.modal.onclose();
   assert.equal(made(t).length, 0, 'nothing was kept');
+});
+
+test('Create puzzle test: picks say whether they came from the artist (top) or the words as typed (bottom)', async () => {
+  const events = [];
+  const t = await mount({ stored: signedIn, server: painter({ n: 0 }, ['today', 'today', 'typed', 'typed']), catseye: (name, data) => events.push([name, data]) });
+  await tick();
+  await createFromHome(t);
+  assert.equal(t.elements.candidates.children.length, 4);
+  t.elements.candidates.children[2].onclick();
+  t.elements.keepMade.onclick();
+  const pick = events.find(([name]) => name === 'llm_pick')[1];
+  assert.equal(pick.variant, 'typed');
+  assert.equal(pick.option, 3);
+  assert.equal(events.find(([name]) => name === 'made_puzzle')[1].variant, 'typed');
+  await createFromHome(t, 'a blue cup');
+  t.elements.candidates.children[0].onclick();
+  assert.equal(events.filter(([name]) => name === 'llm_pick')[1][1].variant, 'today');
 });

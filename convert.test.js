@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {convertImage} from './convert.js';
+import {convertImage,LIGHTER} from './convert.js';
 import {createPuzzle,findHint,transfer,correctCount,region} from './game.js';
 const art=JSON.parse(readFileSync(new URL('./assets/art.json',import.meta.url)));
 const rgb=h=>[1,3,5].map(k=>parseInt(h.slice(k,k+2),16));
@@ -27,4 +27,23 @@ test('every built-in and bonus puzzle has a unique id and can be finished with h
  const files=['puzzles.json','bonus.json'].flatMap(list=>JSON.parse(readFileSync(new URL(`./assets/${list}`,import.meta.url)))),ids=new Set();
  for(const file of files){const a=JSON.parse(readFileSync(new URL(`./assets/${file}`,import.meta.url)));
   assert.ok(a.id&&a.title&&!ids.has(a.id),file);ids.add(a.id);assert.equal(a.pixels.length,a.width*a.height);assert.ok(solve(a),file);}
+});
+
+// The lighter conversion (used in the Create puzzle test): small features and thin outlines.
+// A pink face with a thick dark outline and two small dark eyes, on white, 256 × 256.
+const face=()=>{const W=256,out=new Uint8Array(W*W*4);for(let i=0;i<W*W;i++){const x=i%W,y=Math.floor(i/W),r=Math.hypot(x-128,y-128);
+ let c=[255,255,255];if(r<118)c=[30,30,40];if(r<106)c=[240,160,175];if(Math.hypot(x-96,y-112)<3||Math.hypot(x-160,y-112)<3)c=[30,30,40];out.set([...c,255],i*4);}return out;};
+const darkInside=(a,inner)=>{const dark=a.colors.findIndex(c=>parseInt(c.slice(1,3),16)<80);
+ return a.pixels.filter((p,i)=>p===dark&&(Math.hypot(i%32-15.5,Math.floor(i/32)-15.5)<10)===inner).length;};
+test('the lighter conversion keeps small eyes and thins a thick outline; the default does neither',()=>{
+ const today=convertImage(face(),256,256,{}),lighter=convertImage(face(),256,256,LIGHTER);
+ assert.equal(darkInside(today,true),0,'today the eyes lose the vote and vanish');
+ assert.equal(darkInside(lighter,true),2,'one jewel kept for each eye');
+ assert.equal(lighter.colors.length,today.colors.length,'no extra colors');
+ assert.ok(darkInside(lighter,false)<darkInside(today,false)*0.7,'a thinner outline');
+});
+test('a lighter-converted picture is still a solvable puzzle',()=>{
+ const out=convertImage(raster(art,12,60),384,384,{colors:12,id:'lighter',...LIGHTER});
+ assert.ok(out.colors.length<=12&&out.colors.length>=2);
+ assert.ok(solve(out),'hint moves finish the puzzle');
 });

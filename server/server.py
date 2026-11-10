@@ -14,7 +14,7 @@ everything but signing in and the health check needs `Authorization: Bearer <tok
     POST   /api/messages  {to, text | puzzle, client_id} -> {message}
     POST   /api/messages/read {friend, up_to}            -> {unread}
     POST   /api/jobs      {prompt}                       -> 202 {id}
-    GET    /api/jobs/<id>                                -> status, then images
+    GET    /api/jobs/<id>                                -> status, then images and which setup made each (variants)
     GET    /api/health                                   -> {model: "ready" | "loading" | "error"}
 
 Texts about unread messages go out through textbot's notify service on this Mac
@@ -73,6 +73,12 @@ KEEP_JOBS = 30
 # Bold, flat, outlined icons on a plain background survive the trip down to 32x32.
 STYLE = ("flat vector icon style, bold simple shapes, thick dark outlines, at most 8 flat colors, "
          "no gradients, no text, plain solid light background")
+# The Create puzzle test (CREATE_TEST=1): half the pictures are painted from the artist's
+# subject as usual ("today"), half from the player's words exactly as typed ("typed"); the
+# game converts the "typed" ones with its lighter, feature-keeping conversion. Each job's
+# pictures are saved in data/create-test/ to compare later. Off: all four are "today".
+CREATE_TEST = os.environ.get("CREATE_TEST", "0") == "1"
+CREATE_TEST_DIR = ROOT / "data" / "create-test"
 
 # Texts about unread chat messages (chat.due_notices has the rule; texts.py sends them).
 NOTICE_CHECK_SECONDS = 60
@@ -116,14 +122,39 @@ def subject_for(idea: str, job_id: str, account: str) -> tuple[str, bool]:
     return idea, False
 
 
-def picture_data_url(image) -> str:
+def picture_png(image) -> bytes:
     # The converter works from a 128x128 grid, so 256px is plenty and keeps responses small.
     from PIL import Image
 
     image = image.convert("RGB").resize((256, 256), Image.LANCZOS)
     buffer = io.BytesIO()
     image.save(buffer, "PNG")
-    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
+    return buffer.getvalue()
+
+
+def data_url(png: bytes) -> str:
+    return "data:image/png;base64," + base64.b64encode(png).decode()
+
+
+def paint_plan(idea: str, subject: str) -> list[tuple[str, str]]:
+    """What to paint for one job: (variant, prompt) per picture, in the order they're shown."""
+    today = ("today", f"{subject}, one subject centered, {STYLE}")
+    if not CREATE_TEST:
+        return [today] * CANDIDATES
+    typed = ("typed", f"{idea}, one subject centered, {STYLE}")
+    return [today] * (CANDIDATES // 2) + [typed] * (CANDIDATES - CANDIDATES // 2)
+
+
+def save_test_job(job_id: str, job: dict, subject: str, plan: list[tuple[str, str]], pictures: list[bytes]) -> None:
+    """Keep a test job's pictures and what made them, to look at side by side later."""
+    folder = CREATE_TEST_DIR / job_id
+    folder.mkdir(parents=True, exist_ok=True)
+    for n, png in enumerate(pictures):
+        (folder / f"{n}-{plan[n][0]}.png").write_bytes(png)
+    (folder / "job.json").write_text(json.dumps({
+        "idea": job["prompt"], "subject": subject, "account": job["account"], "at": int(time.time()),
+        "pictures": [{"file": f"{n}-{variant}.png", "variant": variant, "prompt": prompt} for n, (variant, prompt) in enumerate(plan)],
+    }, indent=1))
 
 
 def update(job_id: str, **fields) -> None:
@@ -150,15 +181,21 @@ def worker() -> None:
             started = time.time()
             update(job_id, status="writing")
             subject, from_agent = subject_for(jobs[job_id]["prompt"], job_id, jobs[job_id]["account"])
-            prompt = f"{subject}, one subject centered, {STYLE}"
+            plan = paint_plan(jobs[job_id]["prompt"], subject)
             update(job_id, status="painting", subject=subject, agent=from_agent)
-            images = []
-            for _ in range(CANDIDATES):
+            pictures = []
+            for _, prompt in plan:
                 result = model.generate_image(seed=random.randrange(2**31), prompt=prompt,
                                               num_inference_steps=8, width=512, height=512)
-                images.append(picture_data_url(result.image))
-                update(job_id, painted=len(images))
-            update(job_id, status="done", images=images, seconds=round(time.time() - started, 1))
+                pictures.append(picture_png(result.image))
+                update(job_id, painted=len(pictures))
+            if CREATE_TEST:
+                try:
+                    save_test_job(job_id, jobs[job_id], subject, plan, pictures)
+                except OSError:
+                    traceback.print_exc()  # keeping a copy must never cost the player their pictures
+            update(job_id, status="done", images=[data_url(png) for png in pictures], variants=[v for v, _ in plan],
+                   seconds=round(time.time() - started, 1))
             print(f"job {job_id} ({jobs[job_id]['account']}): {subject!r} in {time.time() - started:.1f}s (agent={from_agent})", flush=True)
         except Exception as error:
             traceback.print_exc()
@@ -174,6 +211,7 @@ def public_view(job: dict) -> dict:
         view["ahead"] = len(ahead)
     if job["status"] == "done":
         view["images"] = job["images"]
+        view["variants"] = job.get("variants")
     return view
 
 
@@ -377,6 +415,7 @@ def main() -> None:
     if texts.token():
         threading.Thread(target=notice_loop, daemon=True).start()
     print(f"texts about unread messages: {'on' if texts.token() else 'off (no TEXTBOT_NOTIFY_TOKEN)'}", flush=True)
+    print(f"Create puzzle test: {'on (2 today + 2 as typed)' if CREATE_TEST else 'off'}", flush=True)
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"Pixel Game server on http://127.0.0.1:{PORT} (agent={'on' if USE_AGENT else 'off'}, data={db.path})", flush=True)
     server.serve_forever()

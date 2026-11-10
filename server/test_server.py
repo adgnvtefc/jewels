@@ -429,5 +429,38 @@ class TextTest(Harness):
         self.assertEqual(len(self.texts), 1 + self.db.one("SELECT count(*) FROM accounts")[0])
 
 
+class CreateTestTest(unittest.TestCase):
+    """The Create puzzle test: what gets painted, and the copy kept for later."""
+
+    def test_off_all_four_come_from_the_artist(self):
+        with mock.patch.object(server, "CREATE_TEST", False):
+            plan = server.paint_plan("a sleepy cat", "a curled gray cat with closed eyes")
+        self.assertEqual([v for v, _ in plan], ["today"] * 4)
+        self.assertTrue(all(p.startswith("a curled gray cat with closed eyes, one subject centered, flat vector") for _, p in plan))
+
+    def test_on_two_from_the_artist_then_two_as_typed(self):
+        with mock.patch.object(server, "CREATE_TEST", True):
+            plan = server.paint_plan("a sleepy cat", "a curled gray cat with closed eyes")
+        self.assertEqual([v for v, _ in plan], ["today", "today", "typed", "typed"])
+        self.assertTrue(plan[0][1].startswith("a curled gray cat with closed eyes, one subject centered, "))
+        self.assertTrue(plan[2][1].startswith("a sleepy cat, one subject centered, "), "the player's words, untouched")
+        self.assertEqual(plan[0][1].split("centered, ")[1], plan[2][1].split("centered, ")[1], "same style line")
+
+    def test_a_test_job_keeps_its_pictures_and_what_made_them(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(server, "CREATE_TEST", True), \
+                mock.patch.object(server, "CREATE_TEST_DIR", Path(folder)):
+            plan = server.paint_plan("a ladybug", "a red ladybug with black spots")
+            server.save_test_job("a" * 32, {"prompt": "a ladybug", "account": "bob"}, "a red ladybug with black spots", plan, [b"png%d" % n for n in range(4)])
+            saved = json.loads((Path(folder) / ("a" * 32) / "job.json").read_text())
+            self.assertEqual((Path(folder) / ("a" * 32) / "3-typed.png").read_bytes(), b"png3")
+        self.assertEqual(saved["idea"], "a ladybug")
+        self.assertEqual([p["variant"] for p in saved["pictures"]], ["today", "today", "typed", "typed"])
+
+    def test_a_finished_job_says_which_setup_made_each_picture(self):
+        job = {"id": "b" * 32, "status": "done", "created": 0, "images": ["data:a", "data:b", "data:c", "data:d"],
+               "variants": ["today", "today", "typed", "typed"]}
+        self.assertEqual(server.public_view(job)["variants"], ["today", "today", "typed", "typed"])
+
+
 if __name__ == "__main__":
     unittest.main()
