@@ -18,5 +18,10 @@
  "puzzles/gym-hamster-v1.json",
  "puzzles/anatomical-heart-v1.json",
  "puzzles/alpaca-v1.json",
- "puzzles/flag-of-monaco-v1.json"
+ "puzzles/flag-of-monaco-v1.json",
+ "puzzles/pumpkin-king-v1.json",
+ "puzzles/providence-skyline-v1.json",
+ "puzzles/mango-sticky-rice-v1.json",
+ "puzzles/peekaboo-cats-v1.json",
+ "puzzles/cherry-dark-chocolate-v1.json"
 ]
