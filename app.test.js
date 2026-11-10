@@ -241,7 +241,7 @@ test('bonus puzzles live in Free play, not the levels, and the pop-up goes once 
 const tick = (ms = 15) => new Promise(resolve => setTimeout(resolve, ms));
 const sent = { id: 'custom-sent1', title: 'From <b>her</b>', width: 2, height: 2, colors: ['#0088ff', '#ffee00'], pixels: [0, 1, 0, 1] };
 const signedIn = { 'little-jewel:account': JSON.stringify({ name: 'bob', token: 'tok', friends: ['billy'] }) };
-function fakeServer({ messages = [], library = [], unread = 0 } = {}) {
+function fakeServer({ messages = [], library = [], unread = 0, notify = { messages: true, puzzles: true, finished: true } } = {}) {
   return (method, path, body) => {
     if (path.startsWith('/api/saves') && method === 'GET') return [200, { rev: 5, saves: [], library }];
     if (path === '/api/saves') return [200, { rev: 6, results: Object.fromEntries(body.saves.map(s => [s.puzzle, { rev: 6 }])), rejected: [] }];
@@ -250,6 +250,7 @@ function fakeServer({ messages = [], library = [], unread = 0 } = {}) {
       : [201, { message: { id: 99, from: 'bob', to: 'billy', kind: body.text ? 'text' : 'puzzle', text: body.text, puzzle: body.puzzle, client_id: body.client_id, at: 1 } }];
     if (path === '/api/messages/read') return [200, { unread: 0 }];
     if (path === '/api/logout') return [200, { ok: true }];
+    if (path === '/api/notifications') return method === 'GET' ? [200, notify] : [200, Object.assign(notify, body)];
     return [404, {}];
   };
 }
@@ -268,6 +269,26 @@ test('signed in: the corner shows the name, progress is the account’s own, and
   assert.equal(t.saves['interaction-test'].moves, 0, 'the guest save is untouched');
   assert.equal(JSON.parse(t.store['little-jewel:bob:sorting-v2:interaction-test']).moves, 1);
   assert.deepEqual(JSON.parse(t.store['little-jewel:bob:sync']).dirty, ['interaction-test'], 'noted for the next sync');
+});
+
+test('Settings shows only when signed in and saves each chat notification switch to the server', async () => {
+  const guest = await mount();
+  assert.equal(guest.elements.settingsButton.hidden, true, 'guests have no settings');
+  const notify = { messages: true, puzzles: false, finished: true };
+  const t = await mount({ stored: signedIn, server: fakeServer({ notify }) });
+  await tick();
+  assert.equal(t.elements.settingsButton.hidden, false);
+  t.elements.settingsButton.onclick();
+  await tick();
+  assert.equal(t.elements.settings.hidden, false); assert.equal(t.elements.home.hidden, true);
+  assert.deepEqual([t.elements.notifyMessages.checked, t.elements.notifyPuzzles.checked, t.elements.notifyFinished.checked], [true, false, true], 'shows what the server has');
+  t.elements.notifyFinished.checked = false;
+  await t.elements.notifyFinished.onchange();
+  assert.deepEqual(t.calls.find(c => c.method === 'PUT' && c.path === '/api/notifications').body, { finished: false }, 'sends only the switch that changed');
+  assert.equal(notify.finished, false);
+  assert.equal(t.elements.settingsStatus.textContent, 'Saved.');
+  t.elements.settingsBack.onclick();
+  assert.equal(t.elements.home.hidden, false);
 });
 
 test('chat shows messages as text, never HTML, and a sent puzzle opens on tap; Menu returns to the chat', async () => {

@@ -27,6 +27,7 @@
     <button id="createHome" class="home-button">✦ Create puzzle</button>
     <button id="gallery" class="home-button">Gallery</button>
     <button id="chatButton" class="home-button chat-button" hidden><span id="chatLabel">Chat</span><span id="unreadBadge" class="badge" hidden></span></button>
+    <button id="settingsButton" class="home-button" hidden>Settings</button>
   </main>
   <main id="game" class="app" aria-label="Pixel Game" hidden>
     <header class="game-top"><span id="puzzleName"></span><span id="moveCount" aria-live="off"></span></header>
@@ -47,6 +48,17 @@
     <ol id="chatMessages" class="chat-messages" aria-live="polite"></ol>
     <p id="chatStatus" class="chat-status-line" role="status"></p>
     <form id="chatForm" class="chat-form"><button type="button" id="chatPuzzle" class="chat-puzzle" aria-label="Send a puzzle">🧩</button><textarea id="chatText" rows="1" maxlength="1000" placeholder="Message" aria-label="Message" enterkeyhint="send"></textarea><button type="submit" id="chatSend" class="chat-send">Send</button></form>
+  </main>
+  <main id="settings" class="settings" aria-label="Settings" hidden>
+    <header class="chat-top"><button id="settingsBack" class="chat-back" aria-label="Back to the start screen">‹ Back</button><h1>Settings</h1></header>
+    <section class="settings-section" aria-labelledby="notifyTitle">
+      <h2 id="notifyTitle">Chat notifications</h2>
+      <p>Get a text when one of these is still unread 10 minutes later.</p>
+      <label class="setting"><input type="checkbox" id="notifyMessages" disabled> New messages</label>
+      <label class="setting"><input type="checkbox" id="notifyPuzzles" disabled> New puzzles</label>
+      <label class="setting"><input type="checkbox" id="notifyFinished" disabled> A puzzle you sent is finished</label>
+      <p id="settingsStatus" class="settings-status" role="status"></p>
+    </section>
   </main>
   <dialog id="modal"><button class="close" id="close" aria-label="Close dialog">×</button><div id="modalContent"></div></dialog>
   <script>window.catseye=window.catseye||function(){(catseye.q=catseye.q||[]).push(arguments)}</script>

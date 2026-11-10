@@ -1,6 +1,6 @@
 import { createPuzzle, select, transfer, correctCount, restore, shelfAction, continueSelection, expandShelf, MAX_SHELF_SIZE, SHELF_SIZE } from './game.js';
 import { builtInPuzzles, customPuzzles, addCustom, removeCustom, progress, thumbnail, readSave, writeSave, snapshot, mergeSaves, storeSnapshot, packSaves, unpackSaves, useProfile, withProfile, clearProfile, forget, jewelsHome, syncMeta } from './library.js';
-import { currentAccount, online, friendName, displayName, takeOldPassword, whenSignedOut, signIn, signOut } from './account.js';
+import { currentAccount, online, friendName, displayName, takeOldPassword, whenSignedOut, signIn, signOut, api } from './account.js';
 import { createMaker } from './create.js';
 import { syncAccount, unsent } from './sync.js';
 import { createChat } from './chat.js';
@@ -417,8 +417,8 @@ $('addShelf').onclick=()=>{
 };
 const esc = text => String(text).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 
-// Three screens: the start screen (home), the board (game) and the chat. Reloading always starts at home.
-function showScreen(name) { for (const id of ['home', 'game', 'chat']) $(id).hidden = id !== name; }
+// Four screens: the start screen (home), the board (game), the chat and settings. Reloading always starts at home.
+function showScreen(name) { for (const id of ['home', 'game', 'chat', 'settings']) $(id).hidden = id !== name; }
 function goHome() {
   showScreen('home'); returnTo = null; chat.close();
   const next = nextLevel();
@@ -438,6 +438,7 @@ function renderAccount() {
   $('accountButton').textContent = !account ? 'Sign in' : account.token ? displayName(account.name) : 'Sign in again';
   $('accountButton').classList.toggle('needs-sign-in', Boolean(account && !account.token));
   $('chatButton').hidden = !online() || !friendName();
+  $('settingsButton').hidden = !online();
   $('chatLabel').textContent = `Chat with ${displayName(friendName())}`;
   showUnread(chat.unread());
 }
@@ -607,6 +608,27 @@ function openChat() {
 }
 $('chatButton').onclick = openChat;
 $('chatBack').onclick = goHome;
+
+// Settings, on their own screen: which chat events text you (saved on the server, per account).
+const NOTIFY = { notifyMessages: 'messages', notifyPuzzles: 'puzzles', notifyFinished: 'finished' };  // checkbox -> setting
+const notifyBoxes = () => Object.entries(NOTIFY).map(([id, setting]) => [$(id), setting]);
+function showNotifySettings(settings) { for (const [box, setting] of notifyBoxes()) { box.checked = settings[setting]; box.disabled = false; } }
+async function openSettings() {
+  if (!online()) return goHome();
+  showScreen('settings');
+  for (const [box] of notifyBoxes()) box.disabled = true;
+  $('settingsStatus').textContent = 'Loading…';
+  try { showNotifySettings(await api.notifications()); $('settingsStatus').textContent = ''; }
+  catch (error) { $('settingsStatus').textContent = error.message || 'Couldn’t load your settings.'; }
+}
+for (const [box, setting] of notifyBoxes()) box.onchange = async () => {
+  const change = { [setting]: box.checked };
+  box.disabled = true;
+  try { showNotifySettings(await api.setNotifications(change)); $('settingsStatus').textContent = 'Saved.'; track('notify_setting', change); }
+  catch (error) { box.checked = !box.checked; box.disabled = false; $('settingsStatus').textContent = error.message || 'Couldn’t save that. Try again.'; }
+};
+$('settingsButton').onclick = openSettings;
+$('settingsBack').onclick = goHome;
 // A puzzle tapped in the chat opens; one removed from Free play comes back first.
 function openFromChat(puzzle, maker) {
   let known = library().find(a => a.id === puzzle.id);

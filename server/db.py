@@ -100,6 +100,18 @@ UPGRADES: list[str] = [
     );
     INSERT INTO chat_notices (account_id, up_to) SELECT id, (SELECT coalesce(max(id), 0) FROM messages) FROM accounts
     """,
+    # 3: which kinds of chat events each account gets texts about (chat.py). Per kind, NULL
+    # means off; a number means on, for messages with a higher id than it: switching a kind
+    # on stores the newest message id then, so older messages never cause a text. No row
+    # means all three are on for everything, as before.
+    """
+    CREATE TABLE notify_settings (
+      account_id INTEGER PRIMARY KEY REFERENCES accounts(id),
+      messages   INTEGER DEFAULT 0,
+      puzzles    INTEGER DEFAULT 0,
+      finished   INTEGER DEFAULT 0
+    )
+    """,
 ]
 VERSION = 1 + len(UPGRADES)
 

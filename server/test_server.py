@@ -279,6 +279,8 @@ class TextTest(Harness):
         newest = self.db.one("SELECT coalesce(max(id), 0) FROM messages")[0]
         for (account,) in self.db.read("SELECT id FROM accounts"):
             chat.mark_noticed(self.db, account, newest)
+        with self.db.transaction() as conn:
+            conn.execute("DELETE FROM notify_settings")  # everyone back to all on
         self.billy_id = accounts.account_id(self.db, "billy")
 
     def tearDown(self):
@@ -300,7 +302,7 @@ class TextTest(Harness):
         self.message("my secret plans")
         self.assertEqual(self.check(9), 0, "not yet")
         self.assertEqual(self.check(11), 1)
-        self.assertEqual(self.texts, [(self.billy_id, "You have unread messages from Bob in Pixel Game")])
+        self.assertEqual(self.texts, [(self.billy_id, "Bob sent you a new message in Pixel Game")])
         self.assertNotIn("secret", self.texts[0][1], "never the message itself")
         self.assertEqual(self.check(30), 0, "once only, until a new message")
 
@@ -331,6 +333,78 @@ class TextTest(Harness):
         status, _ = self.call("POST", "/api/messages", {"to": "billy", "puzzle": "custom-texted", "client_id": "puzzle-texted1"}, token=self.bob)
         self.assertEqual(status, 201)
         self.assertEqual(self.check(11), 1)
+
+    def send_puzzle(self, pid, client_id):
+        self.call("POST", "/api/puzzles", {"art": made(pid)}, token=self.bob)
+        status, _ = self.call("POST", "/api/messages", {"to": "billy", "puzzle": pid, "client_id": client_id}, token=self.bob)
+        self.assertEqual(status, 201)
+
+    def finish(self, pid, client_id):
+        """Bob sends Billy a puzzle and Billy finishes it: Bob gets a 'finished' event."""
+        art = made(pid)
+        self.call("POST", "/api/puzzles", {"art": art}, token=self.billy)
+        self.call("POST", "/api/messages", {"to": "bob", "puzzle": pid, "client_id": client_id}, token=self.billy)
+        self.call("PUT", "/api/saves", {"saves": [{"puzzle": pid, "state": state_for(art, moves=40), "based_on": 0}]}, token=self.bob)
+
+    def settings(self, token=None, **change):
+        if change:
+            return self.call("PUT", "/api/notifications", change, token=token or self.billy)
+        return self.call("GET", "/api/notifications", token=token or self.billy)
+
+    def test_notification_settings_start_on_and_save_per_account(self):
+        self.assertEqual(self.settings(), (200, {"messages": True, "puzzles": True, "finished": True}))
+        self.assertEqual(self.settings(puzzles=False), (200, {"messages": True, "puzzles": False, "finished": True}))
+        self.assertEqual(self.settings()[1]["puzzles"], False, "kept")
+        self.assertEqual(self.settings(token=self.bob)[1]["puzzles"], True, "only for that account")
+        for bad in ({}, {"puzzles": "no"}, {"sounds": True}, {"messages": 1}):
+            self.assertEqual(self.settings(**bad)[0] if bad else self.call("PUT", "/api/notifications", {}, token=self.billy)[0], 400, bad)
+        self.assertEqual(self.call("GET", "/api/notifications")[0], 401, "signed in only")
+
+    def test_a_kind_that_is_off_never_causes_a_text(self):
+        self.settings(messages=False)
+        self.message()
+        self.assertEqual(self.check(11), 0)
+        self.send_puzzle("custom-kinds1", "kinds-000001")
+        self.assertEqual(self.check(11), 1, "puzzles are still on")
+        self.assertEqual(self.texts, [(self.billy_id, "Bob sent you a new puzzle in Pixel Game")], "and the message isn't mentioned")
+
+    def test_a_kind_that_is_off_does_not_restart_the_ten_minutes(self):
+        sent = self.message()
+        self.db.conn.execute("UPDATE messages SET created_at = created_at - ? WHERE id = ?", (11 * self.MINUTE, sent["id"]))
+        self.settings(puzzles=False)
+        self.send_puzzle("custom-kinds2", "kinds-000002")  # now, but puzzles are off
+        self.assertEqual(self.check(0), 1, "11 minutes after the message")
+        self.assertEqual(self.texts, [(self.billy_id, "Bob sent you a new message in Pixel Game")])
+
+    def test_switching_a_kind_on_never_texts_about_older_events(self):
+        self.settings(messages=False)
+        self.message("before")
+        self.settings(messages=True)
+        self.assertEqual(self.check(11), 0, "it arrived while messages were off")
+        self.message("after")
+        self.assertEqual(self.check(11), 1)
+        self.assertEqual(self.texts, [(self.billy_id, "Bob sent you a new message in Pixel Game")], "only the newer one counts")
+
+    def test_finished_puzzles_text_the_sender_and_respect_their_setting(self):
+        self.finish("custom-kinds3", "kinds-000003")  # Billy sent it, Bob finished it
+        self.check(11)
+        self.assertIn((self.billy_id, "Bob finished your puzzle in Pixel Game"), self.texts)
+        self.texts.clear()
+        self.settings(finished=False)
+        self.finish("custom-kinds4", "kinds-000004")
+        self.check(11)
+        self.assertNotIn(self.billy_id, [who for who, _ in self.texts])
+
+    def test_the_text_names_each_kind(self):
+        rows = lambda *kinds, sender="bob": [{"sender": sender, "kind": k} for k in kinds]
+        for unread, text in ((rows("text"), "Bob sent you a new message"),
+                             (rows("text", "text", "text"), "Bob sent you 3 new messages"),
+                             (rows("puzzle", "text"), "Bob sent you a new message and a new puzzle"),
+                             (rows("puzzle", "puzzle"), "Bob sent you 2 new puzzles"),
+                             (rows("finished"), "Bob finished your puzzle"),
+                             (rows("finished", "finished", "text"), "Bob sent you a new message and finished 2 of your puzzles"),
+                             (rows("text") + rows("finished", sender="ann"), "Ann finished your puzzle and Bob sent you a new message")):
+            self.assertEqual(chat.notice_text(unread), text + " in Pixel Game")
 
     def test_no_token_means_no_texts(self):
         self.message()

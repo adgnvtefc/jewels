@@ -13,6 +13,8 @@ everything but signing in and the health check needs `Authorization: Bearer <tok
     GET    /api/messages?after=<id> | ?before=<id>       -> {messages, puzzles, unread, start} (chat.py)
     POST   /api/messages  {to, text | puzzle, client_id} -> {message}
     POST   /api/messages/read {friend, up_to}            -> {unread}
+    GET    /api/notifications                            -> {messages, puzzles, finished}: which kinds get texts
+    PUT    /api/notifications {messages?, puzzles?, finished?}  -> all three (true or false)
     POST   /api/jobs      {prompt}                       -> 202 {id}
     GET    /api/jobs/<id>                                -> status, then images and which setup made each (variants)
     GET    /api/health                                   -> {model: "ready" | "loading" | "error"}
@@ -280,12 +282,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/health":
             return self.send(200, {"model": model_state["status"], "agent": USE_AGENT})
         match = re.fullmatch(r"/api/jobs/([0-9a-f]{32})", path)
-        if path not in ("/api/me", "/api/saves", "/api/messages") and not match:
+        if path not in ("/api/me", "/api/saves", "/api/messages", "/api/notifications") and not match:
             return self.send(404, {"error": "Not found."})
         if not (me := self.account()):
             return
         if path == "/api/me":
             return self.send(200, {"name": me["name"], "friends": accounts.friends_of(db, me["id"]), "unread": chat.unread(db, me["id"])})
+        if path == "/api/notifications":
+            return self.send(200, chat.notify_settings(db, me["id"]))
         try:
             numbers = {k: int(v) for k, v in query.items() if k in ("since", "after", "before")}
         except ValueError:
@@ -351,10 +355,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         path, _ = self.route()
-        if path != "/api/saves":
+        if path not in ("/api/saves", "/api/notifications"):
             return self.send(404, {"error": "Not found."})
         if not (me := self.account()):
             return
+        if path == "/api/notifications":
+            return self.send(*chat.set_notify_settings(db, me["id"], self.body()))
         body = self.body(MAX_SAVES_BODY)
         if body is None:
             return self.send(400, {"error": "Bad request."})
@@ -387,7 +393,7 @@ def send_notices(now: int | None = None) -> int:
         try:
             texts.text_player(who, notice["text"])
             sent += 1
-            print(f"texted account {who} about unread messages", flush=True)
+            print(f"texted account {who} about unread chat", flush=True)
         except Exception as error:  # textbot not running, timed out, 404, 429, anything
             print(f"text to account {who} not sent: {texts.why(error)}", flush=True)
     return sent

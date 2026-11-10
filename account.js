@@ -82,4 +82,6 @@ export const api = {
   messages: (query = '') => request(`/api/messages${query ? `?${query}` : ''}`),
   send: message => request('/api/messages', { method: 'POST', body: message }),
   markRead: (friend, upTo) => request('/api/messages/read', { method: 'POST', body: { friend, up_to: upTo } }),
+  notifications: () => request('/api/notifications'),
+  setNotifications: change => request('/api/notifications', { method: 'PUT', body: change }),
 };

@@ -161,24 +161,75 @@ def mark_read(db: Database, account_id: int, data: dict) -> tuple[int, dict]:
 # after the newest message to you, if you still have unread messages, one text. Then no
 # more until a newer message arrives. chat_notices.up_to remembers the newest message id
 # already handled; message ids are AUTOINCREMENT, so they are never reused.
+#
+# Each account chooses which kinds count (notify_settings, all on by default): new
+# messages, new puzzles, and puzzles of yours that were finished. A kind that is off is
+# ignored entirely: it neither starts the 10 minutes nor appears in a text.
+SETTINGS = {"messages": "text", "puzzles": "puzzle", "finished": "finished"}  # setting -> message kind
+
+
+def notify_settings(db: Database, account_id: int) -> dict[str, bool]:
+    row = db.one("SELECT messages, puzzles, finished FROM notify_settings WHERE account_id = ?", (account_id,))
+    return {name: row is None or row[name] is not None for name in SETTINGS}
+
+
+def set_notify_settings(db: Database, account_id: int, data) -> tuple[int, dict]:
+    """Change some of {messages, puzzles, finished} (true or false). -> (status, all three)"""
+    if not isinstance(data, dict) or not data or any(name not in SETTINGS or type(on) is not bool for name, on in data.items()):
+        return 400, {"error": "Bad request."}
+    with db.transaction() as conn:
+        conn.execute("INSERT OR IGNORE INTO notify_settings (account_id) VALUES (?)", (account_id,))
+        row = conn.execute("SELECT * FROM notify_settings WHERE account_id = ?", (account_id,)).fetchone()
+        newest = conn.execute("SELECT coalesce(max(id), 0) FROM messages").fetchone()[0]
+        for name, on in data.items():
+            if not on:
+                conn.execute(f"UPDATE notify_settings SET {name} = NULL WHERE account_id = ?", (account_id,))
+            elif row[name] is None:  # switched on now: only messages from here on count
+                conn.execute(f"UPDATE notify_settings SET {name} = ? WHERE account_id = ?", (newest, account_id))
+    return 200, notify_settings(db, account_id)
+
+
+def notice_text(unread: list) -> str:
+    """'Bob sent you a new message and a new puzzle in Pixel Game', from unread rows (sender, kind)."""
+    clauses = []
+    for sender in sorted({row["sender"] for row in unread}):
+        count = lambda kind: sum(row["sender"] == sender and row["kind"] == kind for row in unread)
+        some = lambda n, one, many: one if n == 1 else f"{n} {many}"
+        sent = [some(n, "a new message", "new messages") for n in [count("text")] if n] + \
+               [some(n, "a new puzzle", "new puzzles") for n in [count("puzzle")] if n]
+        doing = [f"sent you {' and '.join(sent)}"] if sent else []
+        if n := count("finished"):
+            doing.append("finished your puzzle" if n == 1 else f"finished {n} of your puzzles")
+        clauses.append(sender[:1].upper() + sender[1:] + " " + " and ".join(doing))
+    return (", ".join(clauses[:-1]) + " and " if len(clauses) > 1 else "") + clauses[-1] + " in Pixel Game"
+
+
 def due_notices(db: Database, now: int | None = None) -> list[dict]:
     """Who should get a text now: [{account_id, up_to, text}]. Reads only; sends nothing."""
     now = now_ms() if now is None else now
+    # Messages not yet handled, of the kinds each recipient has on (and newer than when
+    # that kind was switched on).
     rows = db.read(
-        "SELECT m.to_id AS account_id, max(m.id) AS newest, max(m.created_at) AS last_at "
-        "FROM messages m LEFT JOIN chat_notices n ON n.account_id = m.to_id "
-        "GROUP BY m.to_id HAVING newest > coalesce(max(n.up_to), 0) AND last_at <= ?",
-        (now - NOTICE_AFTER_MS,))
-    due = []
+        "SELECT * FROM (SELECT m.id, m.to_id, m.kind, m.created_at, a.name AS sender, "
+        "  m.id > coalesce(r.last_read_id, 0) AS unread, "
+        "  CASE WHEN s.account_id IS NULL THEN 0 WHEN m.kind = 'text' THEN s.messages "
+        "       WHEN m.kind = 'puzzle' THEN s.puzzles ELSE s.finished END AS since "
+        "  FROM messages m JOIN accounts a ON a.id = m.from_id "
+        "  LEFT JOIN chat_notices n ON n.account_id = m.to_id "
+        "  LEFT JOIN chat_reads r ON r.account_id = m.to_id AND r.friend_id = m.from_id "
+        "  LEFT JOIN notify_settings s ON s.account_id = m.to_id "
+        "  WHERE m.id > coalesce(n.up_to, 0)) "
+        "WHERE since IS NOT NULL AND id > since ORDER BY id")
+    by_account: dict[int, list] = defaultdict(list)
     for row in rows:
-        senders = db.read(
-            "SELECT DISTINCT a.name FROM messages m JOIN accounts a ON a.id = m.from_id "
-            "LEFT JOIN chat_reads r ON r.account_id = m.to_id AND r.friend_id = m.from_id "
-            "WHERE m.to_id = ? AND m.id > coalesce(r.last_read_id, 0) ORDER BY a.name", (row["account_id"],))
-        if senders:  # everything was read in time: nothing to say
-            names = " and ".join(r["name"][:1].upper() + r["name"][1:] for r in senders)
-            due.append({"account_id": row["account_id"], "up_to": row["newest"],
-                        "text": f"You have unread messages from {names} in Pixel Game"})
+        by_account[row["to_id"]].append(row)
+    due = []
+    for account_id, mine in by_account.items():
+        if mine[-1]["created_at"] > now - NOTICE_AFTER_MS:
+            continue  # the newest counted message is under 10 minutes old
+        unread = [row for row in mine if row["unread"]]
+        if unread:  # everything was read in time: nothing to say
+            due.append({"account_id": account_id, "up_to": mine[-1]["id"], "text": notice_text(unread)})
     return due
 
 

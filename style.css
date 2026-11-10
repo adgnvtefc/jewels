@@ -129,12 +129,12 @@ dialog .home-button { width: 100%; max-width: none; margin-top: 10px; }
 .badge { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: #c47b46; color: #fff; font-size: 11px; font-weight: 600; line-height: 20px; }
 
 /* Chat */
-.chat {
+.chat, .settings {
   display: flex; flex-direction: column; max-width: 600px; margin: auto;
   height: var(--viewport-height, 100dvh);
   padding: env(safe-area-inset-top) env(safe-area-inset-right) max(8px, env(safe-area-inset-bottom)) env(safe-area-inset-left);
 }
-.chat[hidden] { display: none; }
+.chat[hidden], .settings[hidden] { display: none; }
 .chat-top { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #e3e6da; }
 .chat-top h1 { margin: 0; font: 22px Georgia, serif; }
 .chat-back { min-height: 44px; padding: 0 8px 0 0; font-size: 14px; color: #3c614f; }
@@ -168,3 +168,11 @@ button.chat-status { color: #a3602f; text-decoration: underline; min-height: 24p
 .chat-form textarea:focus-visible { outline: 3px solid #c47b46; outline-offset: 1px; }
 .chat-puzzle { width: 44px; height: 44px; font-size: 22px; flex: none; }
 .chat-send { min-height: 44px; padding: 0 16px; border-radius: 22px; background: #3f6d59; color: #fff; font-size: 13px; flex: none; }
+
+/* Settings */
+.settings-section { padding: 16px; display: grid; gap: 10px; }
+.settings-section h2 { margin: 0; font-size: 16px; }
+.settings-section p { margin: 0; font-size: 13px; color: #748478; }
+.setting { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 14px; border: 1px solid #d9ddcf; border-radius: 14px; background: #fff; font-size: 15px; color: #294b45; }
+.setting input { width: 22px; height: 22px; margin: 0; accent-color: #3f6d59; }
+.settings-status { min-height: 1.4em; }
