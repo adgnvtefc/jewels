@@ -85,6 +85,20 @@ test('board color selection follows remaining jewels and then the deposited shel
  const pick=select(a,s,'board',0);s=transfer(a,s,pick,'shelf').state;
  const next=continueSelection(a,s,pick);assert.equal(next.kind,'shelf');assert.equal(next.color,0);assert.deepEqual(next.cells,[0,1]);
 });
+test('after placing on the board, the nearest misplaced board group of that color comes before the shelf',()=>{
+ // Color a belongs at 0, 1 and 7; its jewels sit at 2 and 6 (on b's spots) and on the shelf.
+ const a={width:8,height:1,colors:['a','b'],pixels:[0,0,1,1,1,1,1,0]};
+ let s={board:[-1,-1,0,1,1,1,0,-1],shelf:[0,1,1,...Array(21).fill(-1)],moves:0};
+ const fromShelf=select(a,s,'shelf',0);
+ let r=transfer(a,s,fromShelf,'board',0);s=r.state;
+ let next=continueSelection(a,s,fromShelf,0);
+ assert.equal(next.kind,'board');assert.deepEqual(next.cells,[2],'the misplaced jewel nearest spot 0, not the one at 6');
+ r=transfer(a,s,next,'board',1);s=r.state;
+ next=continueSelection(a,s,next,1);assert.deepEqual([next.kind,next.cells[0]],['board',6]);
+ r=transfer(a,s,next,'board',7);s=r.state;
+ next=continueSelection(a,s,next,7);assert.equal(next.kind,'color','every a is home: nothing left to pick');
+ assert.equal(continueSelection(a,{...s,board:[...s.board]},{kind:'color',color:1,cells:[]}).kind,'shelf','without a filled spot (a reload), the shelf still comes first');
+});
 test('shelf compaction preserves order and supplies correct animation paths',()=>{
  const r=compactShelf([-1,2,-1,0,1,-1]);assert.deepEqual(r.shelf,[2,0,1,-1,-1,-1]);
  assert.deepEqual(r.shifts.map(t=>[t.from.index,t.to.index]),[[1,0],[3,1],[4,2]]);

@@ -142,17 +142,25 @@ export function expandShelf(state) {
   return { ...state, shelf: [...state.shelf, ...Array(Math.min(SHELF_ROW, MAX_SHELF_SIZE - state.shelf.length)).fill(-1)] };
 }
 
-// Preserve the color, but refresh its source after moves and shelf compaction.
-export function continueSelection(art, state, previous) {
+// Preserve the color, but refresh its source after moves and shelf compaction. After
+// jewels are placed on the board (`filled` is a spot just filled), misplaced jewels of
+// that color still on the board come next, the group nearest that spot first, so the
+// board clears and the picture comes together; the shelf is used once none are left.
+// After a move to the shelf, the jewels just stored stay selected.
+export function continueSelection(art, state, previous, filled = null) {
   if (!previous) return null;
   const color = previous.color;
   if (previous.kind === 'board') {
     const remaining = previous.cells.find(i => state.board[i] === color && art.pixels[i] !== color);
     if (remaining !== undefined) return select(art, state, 'board', remaining);
   }
+  const misplaced = state.board.flatMap((c, i) => c === color && art.pixels[i] !== color ? [i] : []);
   const shelfIndex = state.shelf.indexOf(color);
+  if (Number.isInteger(filled) && misplaced.length) {
+    const away = i => Math.hypot(i % art.width - filled % art.width, Math.floor(i / art.width) - Math.floor(filled / art.width));
+    return select(art, state, 'board', misplaced.reduce((best, i) => away(i) < away(best) ? i : best));
+  }
   if (shelfIndex >= 0) return select(art, state, 'shelf', shelfIndex);
-  const boardIndex = state.board.findIndex((c, i) => c === color && art.pixels[i] !== color);
-  if (boardIndex >= 0) return select(art, state, 'board', boardIndex);
+  if (misplaced.length) return select(art, state, 'board', misplaced[0]);
   return { kind: 'color', color, index: -1, cells: [] };
 }

@@ -381,7 +381,7 @@ async function move(kind, index) {
   // Up to 64 jewels fly; any others simply appear in place.
   busy = true; const motion=reducedMotion?[]:[...result.transfers,...result.shelfShifts].slice(0,64);
   arrivals = new Set(motion.map(t=>`${t.to.kind}:${t.to.index}`));
-  state = result.state; selection = continueSelection(art,state,selection); save(); update();
+  state = result.state; selection = continueSelection(art,state,selection,kind === 'board' ? index : null); save(); update();
   message(`${result.transfers.length} ${result.transfers.length === 1 ? 'jewel' : 'jewels'} ${kind === 'shelf' ? 'on the shelf. Now make room for their color.' : 'back where they belong.'}`);
   revealShelf(motion);
   try { await animate(motion); } finally {
