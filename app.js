@@ -107,32 +107,32 @@ function update() {
 }
 // Visual states follow the reference: recessed socket, raised loose jewel,
 // lifted selection, and a low-relief jewel seated in its matching tile.
-function octagon(x, y, width) {
+function octagon(x, y, width, c = ctx) {
   const cut=width*.24;
-  ctx.beginPath();ctx.moveTo(x+cut,y);ctx.lineTo(x+width-cut,y);
-  ctx.lineTo(x+width,y+cut);ctx.lineTo(x+width,y+width-cut);
-  ctx.lineTo(x+width-cut,y+width);ctx.lineTo(x+cut,y+width);
-  ctx.lineTo(x,y+width-cut);ctx.lineTo(x,y+cut);ctx.closePath();
+  c.beginPath();c.moveTo(x+cut,y);c.lineTo(x+width-cut,y);
+  c.lineTo(x+width,y+cut);c.lineTo(x+width,y+width-cut);
+  c.lineTo(x+width-cut,y+width);c.lineTo(x+cut,y+width);
+  c.lineTo(x,y+width-cut);c.lineTo(x,y+cut);c.closePath();
 }
-function facet(points, fill) {
-  ctx.beginPath();points.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));ctx.closePath();ctx.fillStyle=fill;ctx.fill();
+function facet(points, fill, c = ctx) {
+  c.beginPath();points.forEach(([x,y],i)=>i?c.lineTo(x,y):c.moveTo(x,y));c.closePath();c.fillStyle=fill;c.fill();
 }
-function jewel(x,y,cell,color,picked=false,seated=false) {
+function jewel(x,y,cell,color,picked=false,seated=false,c=ctx) {
   const w=cell*(seated?.72:.66), x0=x+(cell-w)/2;
   const y0=y+(cell-w)/2-(picked?cell*.13:seated?0:cell*.035);
   const depth=cell*(picked?.13:seated?.015:.07), bevel=w*(seated?.13:.20);
   if(!seated){
-    ctx.save();ctx.shadowColor='#142a294a';ctx.shadowBlur=cell*(picked?.13:.05);ctx.shadowOffsetY=cell*(picked?.13:.055);
-    octagon(x0,y0+depth,w);ctx.fillStyle=color;ctx.fill();ctx.restore();
-    octagon(x0,y0+depth,w);ctx.fillStyle='#00000045';ctx.fill();
+    c.save();c.shadowColor='#142a294a';c.shadowBlur=cell*(picked?.13:.05);c.shadowOffsetY=cell*(picked?.13:.055);
+    octagon(x0,y0+depth,w,c);c.fillStyle=color;c.fill();c.restore();
+    octagon(x0,y0+depth,w,c);c.fillStyle='#00000045';c.fill();
   }
-  octagon(x0,y0,w);ctx.fillStyle=color;ctx.fill();ctx.save();ctx.clip();
-  facet([[x0,y0],[x0+w,y0],[x0+w-bevel,y0+bevel],[x0+bevel,y0+bevel]],seated?'#ffffff24':'#ffffff70');
-  facet([[x0,y0],[x0+bevel,y0+bevel],[x0+bevel,y0+w-bevel],[x0,y0+w]],seated?'#ffffff0c':'#ffffff22');
-  facet([[x0,y0+w],[x0+bevel,y0+w-bevel],[x0+w-bevel,y0+w-bevel],[x0+w,y0+w]],seated?'#00000016':'#00000033');
-  facet([[x0+w,y0],[x0+w,y0+w],[x0+w-bevel,y0+w-bevel],[x0+w-bevel,y0+bevel]],seated?'#0000000c':'#00000018');
-  ctx.restore();
-  octagon(x0,y0,w);ctx.strokeStyle=seated?'#ffffff28':picked?'#ffffffc0':'#142a2938';ctx.lineWidth=Math.max(.5,cell*.025);ctx.stroke();
+  octagon(x0,y0,w,c);c.fillStyle=color;c.fill();c.save();c.clip();
+  facet([[x0,y0],[x0+w,y0],[x0+w-bevel,y0+bevel],[x0+bevel,y0+bevel]],seated?'#ffffff24':'#ffffff70',c);
+  facet([[x0,y0],[x0+bevel,y0+bevel],[x0+bevel,y0+w-bevel],[x0,y0+w]],seated?'#ffffff0c':'#ffffff22',c);
+  facet([[x0,y0+w],[x0+bevel,y0+w-bevel],[x0+w-bevel,y0+w-bevel],[x0+w,y0+w]],seated?'#00000016':'#00000033',c);
+  facet([[x0+w,y0],[x0+w,y0+w],[x0+w-bevel,y0+w-bevel],[x0+w-bevel,y0+bevel]],seated?'#0000000c':'#00000018',c);
+  c.restore();
+  octagon(x0,y0,w,c);c.strokeStyle=seated?'#ffffff28':picked?'#ffffffc0':'#142a2938';c.lineWidth=Math.max(.5,cell*.025);c.stroke();
 }
 function socket(x,y,cell,color,highlight=false) {
   const w=cell*.72,x0=x+(cell-w)/2,y0=y+(cell-w)/2;
@@ -146,32 +146,66 @@ function socket(x,y,cell,color,highlight=false) {
 // Glitter: three tiny white stars pop around a jewel, one after another, when it lands
 // in its right spot on the picture. Not for the shelf, and not with reduced motion.
 const SPARKLE_MS = 450;
-let sparkles = [], sparkling = false;
+// A ripple when a color is finished: starting at the last jewel placed, each jewel of
+// that color swells and brightens for a moment, spreading outward across the color.
+const RIPPLE_SPREAD_MS = 600, RIPPLE_PULSE_MS = 320;
+let sparkles = [], ripples = [], overlayRunning = false;
+function startOverlay() { if (!overlayRunning) { overlayRunning = true; nextFrame(overlayTick); } }
 function sparkle(i) {
   if (reducedMotion || !art || state.board[i] !== art.pixels[i]) return;
   sparkles.push({ i, t0: Date.now(), seed: Math.random() * Math.PI * 2 });
-  if (!sparkling) { sparkling = true; nextFrame(sparkleTick); }
+  startOverlay();
 }
-// Sparkles live on their own transparent canvas over the board, so a sparkle frame
-// repaints a few tiny stars instead of all 1,024 jewels.
+function ripple(color, origin) {
+  if (reducedMotion || !art) return;
+  const W = art.width, cells = [];
+  art.pixels.forEach((c, i) => { if (c === color) cells.push(i); });
+  const away = i => Math.hypot(i % W - origin % W, Math.floor(i / W) - Math.floor(origin / W));
+  const far = Math.max(1, ...cells.map(away));
+  ripples.push({ sprite: rippleSprite(art.colors[color]), t0: Date.now(), cells: cells.map(i => ({ i, delay: away(i) / far * RIPPLE_SPREAD_MS })) });
+  startOverlay();
+}
+// The jewel and its white flash are drawn once per ripple and then stamped, so even a
+// background of 800 jewels costs little per frame on a phone.
+function rippleSprite(color) {
+  const dpr = window.devicePixelRatio || 1, cell = size / art.width * zoom, px = Math.max(1, Math.ceil(cell * dpr));
+  const make = paint => { const c = document.createElement('canvas'); c.width = c.height = px; const g = c.getContext('2d'); g.scale(px / cell, px / cell); paint(g); return c; };
+  const w = cell * .72;
+  return {
+    jewel: make(g => jewel(0, 0, cell, color, false, true, g)),
+    flash: make(g => { octagon((cell - w) / 2, (cell - w) / 2, w, g); g.fillStyle = '#fff'; g.fill(); }),
+  };
+}
+// Sparkles and ripples live on their own transparent canvas over the board, so a frame
+// repaints only what is moving instead of all 1,024 jewels.
 const sparkleCanvas = $('sparkleLayer'), sctx = sparkleCanvas.getContext('2d');
-function sparkleTick() {
+function overlayTick() {
   const now = Date.now();
   sparkles = sparkles.filter(s => now - s.t0 < SPARKLE_MS);
-  drawSparkles();
-  if (sparkles.length) nextFrame(sparkleTick); else sparkling = false;
+  ripples = ripples.filter(r => now - r.t0 < RIPPLE_SPREAD_MS + RIPPLE_PULSE_MS);
+  drawOverlay();
+  if (sparkles.length || ripples.length) nextFrame(overlayTick); else overlayRunning = false;
 }
 function sparkleStar(cx, cy, r) {
   sctx.beginPath();
   for (let k = 0; k < 8; k++) { const rr = k % 2 ? r * .28 : r, an = k * Math.PI / 4; sctx.lineTo(cx + Math.sin(an) * rr, cy - Math.cos(an) * rr); }
   sctx.closePath(); sctx.fill();
 }
-function drawSparkles() {
+function drawOverlay() {
   const dpr = window.devicePixelRatio || 1, cell = size / (art?.width || 1) * zoom;
   sctx.setTransform(dpr, 0, 0, dpr, 0, 0); sctx.clearRect(0, 0, size, size);
-  if (!sparkles.length || !art) return;
+  if ((!sparkles.length && !ripples.length) || !art) return;
   sctx.translate(ox, oy);
   const now = Date.now();
+  for (const r of ripples) for (const { i, delay } of r.cells) {
+    const k = (now - r.t0 - delay) / RIPPLE_PULSE_MS;
+    if (k <= 0 || k >= 1) continue;
+    const x = i % art.width * cell, y = Math.floor(i / art.width) * cell;
+    if (x + ox > size || y + oy > size || x + ox + cell < 0 || y + oy + cell < 0) continue;  // off screen when zoomed
+    const a = Math.sin(Math.PI * k), s = cell * (1 + .3 * a), sx = x + (cell - s) / 2, sy = y + (cell - s) / 2;
+    sctx.drawImage(r.sprite.jewel, sx, sy, s, s);
+    sctx.globalAlpha = .4 * a; sctx.drawImage(r.sprite.flash, sx, sy, s, s); sctx.globalAlpha = 1;
+  }
   sctx.fillStyle = '#fff';
   for (const s of sparkles) {
     const p = (now - s.t0) / SPARKLE_MS, cx = (s.i % art.width + .5) * cell, cy = (Math.floor(s.i / art.width) + .5) * cell;
@@ -333,10 +367,17 @@ async function animate(transfers) {
     } catch { el.remove(); }
   }));
 }
+// Colors with every jewel home.
+function finishedColors() {
+  const left = new Set();
+  art.pixels.forEach((c, i) => { if (c >= 0 && state.board[i] !== c) left.add(c); });
+  return new Set(art.colors.map((_, c) => c).filter(c => !left.has(c) && art.pixels.includes(c)));
+}
 async function move(kind, index) {
   if (selection?.kind === 'color') { message('This color is complete. Choose another color.'); return; }
   const result = transfer(art, state, selection, kind, index);
   if (result.error) { message(result.error); return; }
+  const finishedBefore = finishedColors();
   // Up to 64 jewels fly; any others simply appear in place.
   busy = true; const motion=reducedMotion?[]:[...result.transfers,...result.shelfShifts].slice(0,64);
   arrivals = new Set(motion.map(t=>`${t.to.kind}:${t.to.index}`));
@@ -349,6 +390,11 @@ async function move(kind, index) {
     // Jewels past the first 64 don't fly; they sparkle as they appear.
     const flown = new Set(motion.map(t => `${t.to.kind}:${t.to.index}`));
     for (const t of result.transfers) if (t.to.kind === 'board' && !flown.has(`board:${t.to.index}`)) sparkle(t.to.index);
+    // A color whose last jewel just landed ripples out from that jewel.
+    for (const color of finishedColors()) if (!finishedBefore.has(color)) {
+      const last = result.transfers.findLast(t => t.to.kind === 'board' && t.color === color);
+      if (last) ripple(color, last.to.index);
+    }
   }
   if (correctCount(art, state) === total) {
     track('level_complete', { puzzle: art.id, title: art.title, custom: !builtIns.some(a => a.id === art.id), moves: state.moves, colors: art.colors.length, jewels: total });
@@ -463,7 +509,7 @@ $('startGame').onclick = () => { const next = nextLevel(); if (next >= 0) openPu
 $('menu').onclick = () => { if (!busy) leaveGame(); };
 
 function openPuzzle(next, levelIndex = null, from = null) {
-  art = next; level = levelIndex; returnTo = from; total = art.pixels.filter(c => c >= 0).length; sparkles = []; drawSparkles();
+  art = next; level = levelIndex; returnTo = from; total = art.pixels.filter(c => c >= 0).length; sparkles = []; ripples = []; drawOverlay();
   showScreen('game');
   const saved = readSave(art.id);
   state = restore(art, saved) || createPuzzle(art);

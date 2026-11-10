@@ -56,7 +56,8 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
   const store = { ...stored }, sorting = 'little-jewel:sorting-v2:', calls = [];
   const running = runInNewContext(`(async () => {
     ${source}
-    return { view: () => ({zoom, ox, oy}), isBusy: () => busy, sparkles: () => sparkles.map(s => s.i) };
+    return { view: () => ({zoom, ox, oy}), isBusy: () => busy, sparkles: () => sparkles.map(s => s.i),
+      ripples: () => ripples.map(r => ({ cells: r.cells.map(c => c.i), from: r.cells.find(c => c.delay === 0).i })) };
   })()`, {
     game, console, window: { devicePixelRatio: 1 },
     document: { getElementById: id => elements[id] ?? null, createElement: element, body: element(), visibilityState: 'visible', addEventListener() {} },
@@ -112,6 +113,10 @@ test('minimal UI loads and transfers board → shelf → board without camera ju
   await t.tap(300, 100); // Place them on the freed yellow spaces.
   assert.deepEqual(t.saved().board, [-1, 1, -1, 1]);
   assert.deepEqual([...t.app.sparkles()].sort(), [1, 3], 'each jewel landing in its spot sparkles');
+  const [yellow, ...more] = t.app.ripples();
+  assert.equal(more.length, 0, 'only the finished color ripples; blue still has jewels on the shelf');
+  assert.deepEqual([...yellow.cells].sort(), [1, 3], 'every jewel of that color takes part');
+  assert.ok([1, 3].includes(yellow.from), 'starting from a jewel that just landed');
   const view = JSON.stringify(t.app.view());
   t.elements.shelf.children[0].onclick();
   assert.equal(JSON.stringify(t.app.view()), view, 'shelf selection must not zoom or pan');
