@@ -725,23 +725,9 @@ const maker = createMaker({
   signIn: (note, then) => signInPrompt({ note, then }),
 });
 
-// iPhone and iPad can't show a web page fullscreen; added to the Home Screen, the game
-// opens from its own icon in its own window, with no address bar. Suggested once.
-const HOME_SCREEN_HINT = 'little-jewel:home-screen-hint';
-function homeScreenHint() {
-  const nav = globalThis.navigator;
-  const apple = /iPhone|iPad|iPod/.test(nav?.userAgent || '') || (nav?.platform === 'MacIntel' && nav?.maxTouchPoints > 1);
-  const installed = nav?.standalone === true || matchMedia('(display-mode: standalone)').matches;
-  let seen = true;
-  try { seen = Boolean(localStorage.getItem(HOME_SCREEN_HINT)); } catch {}
-  if (!apple || installed || seen) return;
-  try { localStorage.setItem(HOME_SCREEN_HINT, '1'); } catch {}
-  track('home_screen_hint');
-  show(`<p class="eyebrow">PLAY IT LIKE AN APP</p><h2>Add to Home Screen</h2><p>Tap the Share button (the square with an arrow), then <strong>Add to Home Screen</strong>. The game then opens full screen from its own icon, with no address bar.</p><p>Progress you made without signing in stays here in the browser. Sign in on the Home Screen version to bring yours along.</p><button class="primary" id="hintOk">Got it</button>`);
-  $('hintOk').onclick = () => $('modal').close();
-}
+// The old Add to Home Screen pop-up is gone; forget whether it was shown.
+try { localStorage.removeItem('little-jewel:home-screen-hint'); } catch {}
 
 if (online()) chat.reset();
 goHome();
-homeScreenHint();
 syncNow();

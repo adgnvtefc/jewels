@@ -375,17 +375,11 @@ test('signing out removes the account’s copy from this browser', async () => {
   assert.ok(t.calls.some(c => c.path === '/api/logout'));
 });
 
-test('on an iPhone, the Add to Home Screen hint shows once, and never in the Home Screen app', async () => {
+test('no pop-up on opening, even on an iPhone, and the old Add to Home Screen note is forgotten', async () => {
   const iphone = { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)', standalone: false };
-  const first = await mount({ navigator: iphone });
-  assert.equal(first.elements.modal.open, true);
-  assert.match(first.elements.modalContent.markup, /Add to Home Screen/);
-  const again = await mount({ navigator: iphone, stored: { ...first.store } });
-  assert.notEqual(again.elements.modal.open, true, 'only once');
-  const app = await mount({ navigator: { ...iphone, standalone: true } });
-  assert.notEqual(app.elements.modal.open, true, 'not when already on the Home Screen');
-  const desktop = await mount({ navigator: { userAgent: 'Mozilla/5.0 (Macintosh)', platform: 'MacIntel', maxTouchPoints: 0 } });
-  assert.notEqual(desktop.elements.modal.open, true, 'not on a computer');
+  const t = await mount({ navigator: iphone, stored: { 'little-jewel:home-screen-hint': '1' } });
+  assert.notEqual(t.elements.modal.open, true);
+  assert.equal(t.store['little-jewel:home-screen-hint'], undefined);
 });
 
 // The create pop-up, from the start screen: idea → four versions → Play now, Save or Try again.
