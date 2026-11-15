@@ -503,37 +503,91 @@ class TextTest(Harness):
         self.assertEqual(len(self.texts), 1 + self.db.one("SELECT count(*) FROM accounts")[0])
 
 
-class CreateTestTest(unittest.TestCase):
-    """The Create puzzle test: what gets painted, and the copy kept for later."""
+class PainterTestTest(unittest.TestCase):
+    """The painter test: what gets painted, the painter's art, and the shuffled order kept."""
+    IDEA, SUBJECT = "a sleepy cat", "a curled gray cat with closed eyes"
+
+    @staticmethod
+    def ball(color=(220, 40, 40)):
+        from PIL import Image, ImageDraw
+        picture = Image.new("RGB", (512, 512), (250, 250, 250))
+        ImageDraw.Draw(picture).ellipse((140, 140, 372, 372), fill=color, outline=(30, 30, 40), width=12)
+        return picture
 
     def test_off_all_four_come_from_the_artist(self):
-        with mock.patch.object(server, "CREATE_TEST", False):
-            plan = server.paint_plan("a sleepy cat", "a curled gray cat with closed eyes")
-        self.assertEqual([v for v, _ in plan], ["today"] * 4)
-        self.assertTrue(all(p.startswith("a curled gray cat with closed eyes, one subject centered, flat vector") for _, p in plan))
+        with mock.patch.object(server, "PAINTER_TEST", False):
+            plan = server.paint_plan(self.IDEA, self.SUBJECT)
+        self.assertEqual([v for v, _ in plan], ["current"] * 4)
+        self.assertTrue(all(p.startswith(self.SUBJECT + ", one subject centered, flat vector") for _, p in plan))
 
-    def test_on_two_from_the_artist_then_two_as_typed(self):
-        with mock.patch.object(server, "CREATE_TEST", True):
-            plan = server.paint_plan("a sleepy cat", "a curled gray cat with closed eyes")
-        self.assertEqual([v for v, _ in plan], ["today", "today", "typed", "typed"])
-        self.assertTrue(plan[0][1].startswith("a curled gray cat with closed eyes, one subject centered, "))
-        self.assertTrue(plan[2][1].startswith("a sleepy cat, one subject centered, "), "the player's words, untouched")
-        self.assertEqual(plan[0][1].split("centered, ")[1], plan[2][1].split("centered, ")[1], "same style line")
+    def test_on_two_rewritten_and_two_as_typed_with_the_same_style_line(self):
+        with mock.patch.object(server, "PAINTER_TEST", True):
+            plan = server.paint_plan(self.IDEA, self.SUBJECT)
+        self.assertEqual([v for v, _ in plan], ["current", "current", "painter", "painter"])
+        self.assertTrue(plan[0][1].startswith(self.SUBJECT + ", one subject centered, "))
+        self.assertTrue(plan[2][1].startswith(self.IDEA + ", one subject centered, "), "the player's words, untouched")
+        self.assertEqual(plan[0][1].split("centered, ")[1], plan[2][1].split("centered, ")[1])
 
-    def test_a_test_job_keeps_its_pictures_and_what_made_them(self):
-        with tempfile.TemporaryDirectory() as folder, mock.patch.object(server, "CREATE_TEST", True), \
-                mock.patch.object(server, "CREATE_TEST_DIR", Path(folder)):
-            plan = server.paint_plan("a ladybug", "a red ladybug with black spots")
-            server.save_test_job("a" * 32, {"prompt": "a ladybug", "account": "bob"}, "a red ladybug with black spots", plan, [b"png%d" % n for n in range(4)])
-            saved = json.loads((Path(folder) / ("a" * 32) / "job.json").read_text())
-            self.assertEqual((Path(folder) / ("a" * 32) / "3-typed.png").read_bytes(), b"png3")
-        self.assertEqual(saved["idea"], "a ladybug")
-        self.assertEqual([p["variant"] for p in saved["pictures"]], ["today", "today", "typed", "typed"])
+    def test_the_cleanup_makes_valid_calm_art_and_leaves_the_background_alone(self):
+        import numpy as np
+        palette = np.array([[255, 255, 255], [200, 30, 30], [203, 32, 31], [20, 20, 30], [40, 200, 60]])
+        grid = np.zeros((32, 32), int)
+        grid[8:24, 8:24] = 1
+        grid[8:24, 16:24] = 2      # nearly the same red: merged into one
+        grid[4, 4] = 3             # a lone speck on the background: cleared
+        grid[12:14, 12:14] = 4     # a small green patch: kept
+        art = server.painting.art_from_grid(grid, palette, "A red square")
+        self.assertIsNotNone(saves.valid_art({**art, "id": "custom-abc"}))
+        self.assertEqual(sorted(art["colors"]), ["#28c83c", "#cb201f", "#ffffff"], "the two reds merged into the commoner")
+        self.assertEqual(art["pixels"][0], art["colors"].index("#ffffff"), "white background")
+        self.assertIsNone(server.painting.art_from_grid(np.zeros((32, 32), int), palette, "Blank"), "one color is no puzzle")
 
-    def test_a_finished_job_says_which_setup_made_each_picture(self):
-        job = {"id": "b" * 32, "status": "done", "created": 0, "images": ["data:a", "data:b", "data:c", "data:d"],
-               "variants": ["today", "today", "typed", "typed"]}
-        self.assertEqual(server.public_view(job)["variants"], ["today", "today", "typed", "typed"])
+    @unittest.skipUnless(server.PAINTER_DIR.joinpath("painter.py").exists(), "painter v3 isn't on this machine")
+    def test_painter_v3_turns_a_full_picture_into_valid_puzzle_art(self):
+        found = server.candidate("painter", self.ball(), "a red ball")
+        self.assertEqual(found["variant"], "painter")
+        art = found["art"]
+        self.assertEqual(art["title"], "A red ball")
+        self.assertIsNotNone(saves.valid_art({**art, "id": "custom-ball1"}))
+        self.assertLessEqual(len(art["colors"]), server.PAINTER_COLORS)
+
+    def test_if_the_painter_fails_the_picture_goes_to_the_browser_marked_as_such(self):
+        with mock.patch.object(server.painting, "painted_puzzle", side_effect=RuntimeError("no model")), \
+                contextlib.redirect_stderr(io.StringIO()):
+            found = server.candidate("painter", self.ball(), "a red ball")
+        self.assertEqual(found["variant"], "painter-failed")
+        self.assertTrue(found["image"].startswith("data:image/png;base64,"))
+        self.assertTrue(server.candidate("current", self.ball(), "a red ball")["image"].startswith("data:image/png"))
+
+    def test_candidates_are_shuffled_and_the_order_shown_is_kept(self):
+        art = {"title": "A sleepy cat", "width": 32, "height": 32, "colors": ["#ffffff", "#000000"], "pixels": [0, 1] * 512}
+        painted = [{"picture": self.ball((n * 60, 40, 40)), "file": f"{n}-{v}.png", "variant": v, "prompt": f"p{n}", "seed": 100 + n}
+                   for n, v in enumerate(["current", "current", "painter", "painter"])]
+        orders = set()
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(server, "PAINTER_TEST_DIR", Path(folder)), \
+                mock.patch.object(server.painting, "painted_puzzle", return_value=art):
+            for n in range(12):
+                job_id = f"{n:032x}"
+                shown = server.test_candidates(job_id, {"prompt": self.IDEA, "account": "bob"}, self.SUBJECT, painted)
+                orders.add(tuple(c["variant"] for c in shown))
+                self.assertEqual(sorted(c["variant"] for c in shown), ["current", "current", "painter", "painter"])
+                self.assertTrue(all(("art" in c) == (c["variant"] == "painter") for c in shown), "art for painter, a picture otherwise")
+                kept = json.loads((Path(folder) / job_id / "job.json").read_text())
+                self.assertEqual([k["variant"] for k in kept["shown"]], [c["variant"] for c in shown], "saved in the order shown")
+                self.assertEqual([k["position"] for k in kept["shown"]], [1, 2, 3, 4])
+                self.assertEqual(sorted(k["seed"] for k in kept["shown"]), [100, 101, 102, 103])
+                self.assertEqual(kept["subject"], self.SUBJECT)
+                self.assertTrue(all((Path(folder) / job_id / k["file"]).exists() for k in kept["shown"]), "the full pictures")
+                self.assertTrue(all("art" in k for k in kept["shown"] if k["variant"] == "painter"))
+        self.assertGreater(len(orders), 1, "not always the same order")
+
+    def test_a_finished_job_sends_candidates_in_the_test_and_images_otherwise(self):
+        test = {"id": "b" * 32, "status": "done", "created": 0, "candidates": [{"variant": "painter", "art": {}}]}
+        self.assertEqual(server.public_view(test)["candidates"], test["candidates"])
+        self.assertNotIn("images", server.public_view(test))
+        plain = {"id": "c" * 32, "status": "done", "created": 0, "images": ["data:a"]}
+        self.assertEqual(server.public_view(plain)["images"], ["data:a"])
+        self.assertNotIn("candidates", server.public_view(plain))
 
 
 if __name__ == "__main__":

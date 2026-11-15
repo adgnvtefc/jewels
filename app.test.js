@@ -383,11 +383,11 @@ test('no pop-up on opening, even on an iPhone, and the old Add to Home Screen no
 });
 
 // The create pop-up, from the start screen: idea → four versions → Play now, Save or Try again.
-function painter(jobs = { n: 0 }, variants) {
+function painter(jobs = { n: 0 }, candidates) {
   const server = fakeServer();
   return (method, path, body) => {
     if (path === '/api/jobs' && method === 'POST') { jobs.n++; jobs.prompt = body.prompt; return [202, { id: `j${jobs.n}` }]; }
-    if (path.startsWith('/api/jobs/')) return [200, { status: 'done', subject: 'a red ball', images: variants ? variants.map(v => `data:${v}`) : ['data:a', 'data:b'], variants, seconds: 5 }];
+    if (path.startsWith('/api/jobs/')) return [200, { status: 'done', subject: 'a red ball', seconds: 5, ...(candidates ? { candidates } : { images: ['data:a', 'data:b'] }) }];
     if (path === '/api/puzzles') return [201, { ok: true }];
     return server(method, path, body);
   };
@@ -457,19 +457,23 @@ test('Create puzzle: Try again throws the version away and paints the same idea 
   assert.equal(made(t).length, 0, 'nothing was kept');
 });
 
-test('Create puzzle test: picks say whether they came from the artist (top) or the words as typed (bottom)', async () => {
-  const events = [];
-  const t = await mount({ stored: signedIn, server: painter({ n: 0 }, ['today', 'today', 'typed', 'typed']), catseye: (name, data) => events.push([name, data]) });
+test('painter test: ready-made painter art shows as is, and picks record the pipeline and the order shown', async () => {
+  const events = [], art = { title: 'from the server', width: 2, height: 2, colors: ['#123456', '#abcdef', '#ff0000'], pixels: [0, 1, 2, 1] };
+  const shown = [{ variant: 'painter', art }, { variant: 'current', image: 'data:a' }, { variant: 'current', image: 'data:b' }, { variant: 'painter', art }];
+  const t = await mount({ stored: signedIn, server: painter({ n: 0 }, shown), catseye: (name, data) => events.push([name, data]) });
   await tick();
   await createFromHome(t);
   assert.equal(t.elements.candidates.children.length, 4);
-  t.elements.candidates.children[2].onclick();
+  t.elements.candidates.children[0].onclick();
   t.elements.keepMade.onclick();
   const pick = events.find(([name]) => name === 'llm_pick')[1];
-  assert.equal(pick.variant, 'typed');
-  assert.equal(pick.option, 3);
-  assert.equal(events.find(([name]) => name === 'made_puzzle')[1].variant, 'typed');
+  assert.deepEqual([pick.variant, pick.option, pick.colors, pick.shown], ['painter', 1, 3, 'painter,current,current,painter']);
+  assert.equal(events.find(([name]) => name === 'made_puzzle')[1].variant, 'painter');
+  const [kept] = made(t);
+  assert.deepEqual(kept.pixels, art.pixels, 'the painter art itself, saved to Free play');
+  assert.equal(kept.title, 'A red ball', 'titled like any new puzzle');
+  assert.match(kept.id, /^custom-/);
   await createFromHome(t, 'a blue cup');
-  t.elements.candidates.children[0].onclick();
-  assert.equal(events.filter(([name]) => name === 'llm_pick')[1][1].variant, 'today');
+  t.elements.candidates.children[2].onclick();
+  assert.equal(events.filter(([name]) => name === 'llm_pick')[1][1].variant, 'current');
 });

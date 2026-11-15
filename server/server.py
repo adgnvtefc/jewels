@@ -16,7 +16,7 @@ everything but signing in and the health check needs `Authorization: Bearer <tok
     GET    /api/notifications                            -> {messages, puzzles, finished}: which kinds get texts
     PUT    /api/notifications {messages?, puzzles?, finished?}  -> all three (true or false)
     POST   /api/jobs      {prompt}                       -> 202 {id}
-    GET    /api/jobs/<id>                                -> status, then images and which setup made each (variants)
+    GET    /api/jobs/<id>                                -> status, then images (or, in the painter test, candidates)
     GET    /api/health                                   -> {model: "ready" | "loading" | "error"}
 
 Texts about unread messages go out through textbot's notify service on this Mac
@@ -52,6 +52,7 @@ load_dotenv((ROOT / os.environ.get("HARNESS_ENV", "../../harness/.env")).resolve
 
 import accounts  # noqa: E402  (after .env, so DB_FILE can come from it)
 import chat  # noqa: E402
+import painting  # noqa: E402
 import saves  # noqa: E402
 import texts  # noqa: E402
 from db import Database  # noqa: E402
@@ -75,12 +76,17 @@ KEEP_JOBS = 30
 # Bold, flat, outlined icons on a plain background survive the trip down to 32x32.
 STYLE = ("flat vector icon style, bold simple shapes, thick dark outlines, at most 8 flat colors, "
          "no gradients, no text, plain solid light background")
-# The Create puzzle test (CREATE_TEST=1): half the pictures are painted from the artist's
-# subject as usual ("today"), half from the player's words exactly as typed ("typed"); the
-# game converts the "typed" ones with its lighter, feature-keeping conversion. Each job's
-# pictures are saved in data/create-test/ to compare later. Off: all four are "today".
-CREATE_TEST = os.environ.get("CREATE_TEST", "0") == "1"
-CREATE_TEST_DIR = ROOT / "data" / "create-test"
+# The painter test (PAINTER_TEST=1) compares two whole pipelines. "current": as today, the
+# artist rewrites the idea, Z-Image paints it, and the browser converts it (convert.js).
+# "painter": Z-Image paints the idea exactly as typed and painter v3 turns the full picture
+# into puzzle art here (painting.py). Two of each, shown in a random order; each job's
+# pictures, seeds, prompts, order and painter art are kept in data/painter-test/. Off: all
+# four are "current".
+PAINTER_TEST = os.environ.get("PAINTER_TEST", "0") == "1"
+PAINTER_DIR = Path(os.environ.get("PAINTER_DIR", "~/projects/better-pixels/models/painterv3")).expanduser()
+PAINTER_STYLE = "idylwild"
+PAINTER_COLORS = 10
+PAINTER_TEST_DIR = ROOT / "data" / "painter-test"
 
 # Texts about unread chat messages (chat.due_notices has the rule; texts.py sends them).
 NOTICE_CHECK_SECONDS = 60
@@ -139,29 +145,76 @@ def data_url(png: bytes) -> str:
 
 
 def paint_plan(idea: str, subject: str) -> list[tuple[str, str]]:
-    """What to paint for one job: (variant, prompt) per picture, in the order they're shown."""
-    today = ("today", f"{subject}, one subject centered, {STYLE}")
-    if not CREATE_TEST:
-        return [today] * CANDIDATES
-    typed = ("typed", f"{idea}, one subject centered, {STYLE}")
-    return [today] * (CANDIDATES // 2) + [typed] * (CANDIDATES - CANDIDATES // 2)
+    """(variant, prompt) for each picture to paint."""
+    current = ("current", f"{subject}, one subject centered, {STYLE}")
+    if not PAINTER_TEST:
+        return [current] * CANDIDATES
+    painter = ("painter", f"{idea}, one subject centered, {STYLE}")
+    return [current] * (CANDIDATES // 2) + [painter] * (CANDIDATES - CANDIDATES // 2)
 
 
-def save_test_job(job_id: str, job: dict, subject: str, plan: list[tuple[str, str]], pictures: list[bytes]) -> None:
-    """Keep a test job's pictures and what made them, to look at side by side later."""
-    folder = CREATE_TEST_DIR / job_id
+def title_for(idea: str) -> str:
+    return idea[:1].upper() + idea[1:60]  # as create.js titles a new puzzle
+
+
+def candidate(variant: str, picture, idea: str) -> dict:
+    """What the browser gets for one picture: a picture to convert itself, or (painter) ready art.
+    If the painter can't make a puzzle of it, the picture goes to the browser after all,
+    marked so the pick isn't counted as either pipeline's."""
+    if variant == "painter":
+        try:
+            art = painting.painted_puzzle(picture, title_for(idea), PAINTER_DIR, PAINTER_STYLE, PAINTER_COLORS)
+            if art:
+                return {"variant": "painter", "art": art}
+        except Exception:
+            traceback.print_exc()
+        variant = "painter-failed"
+    return {"variant": variant, "image": data_url(picture_png(picture))}
+
+
+def test_candidates(job_id: str, job: dict, subject: str, painted: list[dict]) -> list[dict]:
+    """The painter test's four candidates, shuffled so no pipeline always shows first; the job
+    is kept with the order it was shown in."""
+    painted = random.sample(painted, len(painted))
+    shown = [{**item, "position": position, **candidate(item["variant"], item["picture"], job["prompt"])}
+             for position, item in enumerate(painted, 1)]
+    try:
+        save_test_job(job_id, job, subject, [{k: v for k, v in item.items() if k != "image"} for item in shown])
+    except OSError:
+        traceback.print_exc()  # keeping a copy must never cost the player their pictures
+    return [{k: item[k] for k in ("variant", "image", "art") if k in item} for item in shown]
+
+
+def save_test_job(job_id: str, job: dict, subject: str, shown: list[dict]) -> None:
+    """Keep a painter-test job: each full picture, and what made it and how it was shown."""
+    folder = PAINTER_TEST_DIR / job_id
     folder.mkdir(parents=True, exist_ok=True)
-    for n, png in enumerate(pictures):
-        (folder / f"{n}-{plan[n][0]}.png").write_bytes(png)
+    for item in shown:
+        item["picture"].save(folder / item["file"])
     (folder / "job.json").write_text(json.dumps({
         "idea": job["prompt"], "subject": subject, "account": job["account"], "at": int(time.time()),
-        "pictures": [{"file": f"{n}-{variant}.png", "variant": variant, "prompt": prompt} for n, (variant, prompt) in enumerate(plan)],
+        "style": PAINTER_STYLE, "most_colors": PAINTER_COLORS,
+        "shown": [{k: v for k, v in item.items() if k != "picture"} for item in shown],
     }, indent=1))
 
 
 def update(job_id: str, **fields) -> None:
     with lock:
         jobs[job_id].update(fields)
+
+
+def start_painter_test() -> None:
+    """Load painter v3 on the worker thread (MLX runs there). If it won't load, Create puzzle
+    carries on without the test."""
+    global PAINTER_TEST
+    if not PAINTER_TEST:
+        return
+    try:
+        painting.load(PAINTER_DIR)
+        print(f"painter test: on (2 current + 2 painter v3, {PAINTER_STYLE}, up to {PAINTER_COLORS} colors)", flush=True)
+    except Exception as error:
+        PAINTER_TEST = False
+        print(f"painter test: off, painter v3 didn't load from {PAINTER_DIR}: {error}", flush=True)
 
 
 def worker() -> None:
@@ -173,6 +226,7 @@ def worker() -> None:
         model = ZImage(model_config=ModelConfig.z_image_turbo(), model_path=MODEL_PATH)
         model_state["status"] = "ready"
         print(f"model ready: {MODEL_PATH}", flush=True)
+        start_painter_test()
     except Exception as error:
         traceback.print_exc()
         model_state.update(status="error", error=str(error))
@@ -185,19 +239,18 @@ def worker() -> None:
             subject, from_agent = subject_for(jobs[job_id]["prompt"], job_id, jobs[job_id]["account"])
             plan = paint_plan(jobs[job_id]["prompt"], subject)
             update(job_id, status="painting", subject=subject, agent=from_agent)
-            pictures = []
-            for _, prompt in plan:
-                result = model.generate_image(seed=random.randrange(2**31), prompt=prompt,
-                                              num_inference_steps=8, width=512, height=512)
-                pictures.append(picture_png(result.image))
-                update(job_id, painted=len(pictures))
-            if CREATE_TEST:
-                try:
-                    save_test_job(job_id, jobs[job_id], subject, plan, pictures)
-                except OSError:
-                    traceback.print_exc()  # keeping a copy must never cost the player their pictures
-            update(job_id, status="done", images=[data_url(png) for png in pictures], variants=[v for v, _ in plan],
-                   seconds=round(time.time() - started, 1))
+            painted = []
+            for n, (variant, prompt) in enumerate(plan):
+                seed = random.randrange(2**31)
+                image = model.generate_image(seed=seed, prompt=prompt, num_inference_steps=8, width=512, height=512).image
+                painted.append({"picture": image, "file": f"{n}-{variant}.png", "variant": variant, "prompt": prompt, "seed": seed})
+                update(job_id, painted=n + 1)
+            if not PAINTER_TEST:
+                update(job_id, status="done", images=[data_url(picture_png(p["picture"])) for p in painted],
+                       seconds=round(time.time() - started, 1))
+            else:
+                update(job_id, status="done", seconds=round(time.time() - started, 1),
+                       candidates=test_candidates(job_id, jobs[job_id], subject, painted))
             print(f"job {job_id} ({jobs[job_id]['account']}): {subject!r} in {time.time() - started:.1f}s (agent={from_agent})", flush=True)
         except Exception as error:
             traceback.print_exc()
@@ -212,8 +265,10 @@ def public_view(job: dict) -> dict:
             ahead = [j for j in jobs.values() if j["status"] in ("queued", "writing", "painting") and j["created"] < job["created"]]
         view["ahead"] = len(ahead)
     if job["status"] == "done":
-        view["images"] = job["images"]
-        view["variants"] = job.get("variants")
+        if "candidates" in job:
+            view["candidates"] = job["candidates"]
+        else:
+            view["images"] = job["images"]
     return view
 
 
@@ -421,7 +476,8 @@ def main() -> None:
     if texts.token():
         threading.Thread(target=notice_loop, daemon=True).start()
     print(f"texts about unread messages: {'on' if texts.token() else 'off (no TEXTBOT_NOTIFY_TOKEN)'}", flush=True)
-    print(f"Create puzzle test: {'on (2 today + 2 as typed)' if CREATE_TEST else 'off'}", flush=True)
+    if not PAINTER_TEST:
+        print("painter test: off", flush=True)
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"Pixel Game server on http://127.0.0.1:{PORT} (agent={'on' if USE_AGENT else 'off'}, data={db.path})", flush=True)
     server.serve_forever()

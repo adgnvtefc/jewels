@@ -3,11 +3,11 @@
 // picks one. The picked one is then played now, saved to Free play, or thrown away to
 // try the same idea again. Closing the pop-up at that point keeps it in Free play.
 //
-// The Create puzzle test (switched on at the server): the top two pictures come from the
-// artist's subject as usual ("today"), the bottom two from the player's words as typed
-// ("typed"), converted with the lighter, feature-keeping conversion. Picks say which.
+// The painter test (switched on at the server): two candidates come as today ("current":
+// the artist's rewrite, converted here), two are made on the Mac by painter v3 from the
+// player's words as typed ("painter"), already puzzle art. The server shuffles them; each
+// pick records its pipeline and its place on screen.
 import { generate, pictureToArt } from './generator.js';
-import { LIGHTER } from './convert.js';
 import { online, ServerError } from './account.js';
 
 // deps: { $, show(markup, then), esc, thumbnail, track,
@@ -44,9 +44,10 @@ export function createMaker(deps) {
         else if (job.status === 'painting') status(`Painting “${job.subject}” — ${job.painted} of ${job.total}…`);
       });
       status('Cutting the jewels…');
-      const variants = job.variants || job.images.map(() => 'today');
-      const choices = await Promise.all(job.images.map((src, n) => pictureToArt(src, { title: title(idea), ...(variants[n] === 'typed' ? LIGHTER : {}) })));
-      deps.track('llm_generate', { ok: true, prompt: idea, subject: job.subject, agent: job.agent, images: job.images.length, seconds: job.seconds, ms: Date.now() - started });
+      const candidates = job.candidates || job.images.map(image => ({ variant: 'current', image }));
+      const variants = candidates.map(c => c.variant);
+      const choices = await Promise.all(candidates.map(c => c.art ? { ...c.art, title: title(idea) } : pictureToArt(c.image, { title: title(idea) })));
+      deps.track('llm_generate', { ok: true, prompt: idea, subject: job.subject, agent: job.agent, images: candidates.length, seconds: job.seconds, ms: Date.now() - started });
       if (mine === run) pick(idea, choices, variants);
     } catch (error) {
       deps.track('llm_generate', { ok: false, prompt: idea, error: error.message, status: error.status, ms: Date.now() - started });
@@ -65,7 +66,7 @@ export function createMaker(deps) {
       button.className = 'candidate'; button.setAttribute('aria-label', `Option ${n + 1}, ${choice.colors.length} colors`);
       button.innerHTML = `<img alt="" src="${thumbnail(choice, n)}"><span>${choice.colors.length} colors</span>`;
       button.onclick = () => {
-        deps.track('llm_pick', { prompt: idea, option: n + 1, colors: choice.colors.length, variant: variants[n] });
+        deps.track('llm_pick', { prompt: idea, option: n + 1, colors: choice.colors.length, variant: variants[n], shown: variants.join(',') });
         made(idea, { ...choice, id: `custom-${Date.now().toString(36)}` }, variants[n]);
       };
       $('candidates').append(button);
