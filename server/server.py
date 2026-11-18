@@ -16,6 +16,7 @@ everything but signing in and the health check needs `Authorization: Bearer <tok
     GET    /api/notifications                            -> {messages, puzzles, finished}: which kinds get texts
     PUT    /api/notifications {messages?, puzzles?, finished?}  -> all three (true or false)
     POST   /api/jobs      {prompt}                       -> 202 {id}
+    POST   /api/gauntlet                                 -> 202 {id}: a job that makes five word-soup puzzles
     GET    /api/jobs/<id>                                -> status, then images (or, in the painter test, candidates)
     GET    /api/health                                   -> {model: "ready" | "loading" | "error"}
 
@@ -87,6 +88,12 @@ PAINTER_DIR = Path(os.environ.get("PAINTER_DIR", "~/projects/better-pixels/model
 PAINTER_STYLE = "idylwild"
 PAINTER_COLORS = 10
 PAINTER_TEST_DIR = ROOT / "data" / "painter-test"
+# The gauntlet: five pictures from random "word soups" of familiar, drawable words
+# (words.json), each blended into one subject by the artist, painted, and played in a row.
+# In a trial, random dictionary words gave shapes unrelated to the words, and soups painted
+# as written lost most of their words; through the artist they became one fun subject.
+GAUNTLET_SIZE = 5
+WORDS = json.loads((ROOT / "words.json").read_text())
 
 # Texts about unread chat messages (chat.due_notices has the rule; texts.py sends them).
 NOTICE_CHECK_SECONDS = 60
@@ -198,6 +205,19 @@ def save_test_job(job_id: str, job: dict, subject: str, shown: list[dict]) -> No
     }, indent=1))
 
 
+def soup(rng=random) -> list[str]:
+    """3 to 5 different words: one describer, one creature or thing, then any mix, shuffled."""
+    words = [rng.choice(WORDS["describers"]), rng.choice(WORDS["creatures"] + WORDS["things"])]
+    groups = [WORDS["describers"], WORDS["creatures"], WORDS["things"], WORDS["doings"]]
+    size = rng.choice([3, 4, 5])
+    while len(words) < size:
+        word = rng.choice(rng.choice(groups))
+        if word not in words:
+            words.append(word)
+    rng.shuffle(words)
+    return words
+
+
 def update(job_id: str, **fields) -> None:
     with lock:
         jobs[job_id].update(fields)
@@ -234,38 +254,61 @@ def worker() -> None:
     while True:
         job_id = waiting.get()
         try:
-            started = time.time()
-            update(job_id, status="writing")
-            subject, from_agent = subject_for(jobs[job_id]["prompt"], job_id, jobs[job_id]["account"])
-            plan = paint_plan(jobs[job_id]["prompt"], subject)
-            update(job_id, status="painting", subject=subject, agent=from_agent)
-            painted = []
-            for n, (variant, prompt) in enumerate(plan):
-                seed = random.randrange(2**31)
-                image = model.generate_image(seed=seed, prompt=prompt, num_inference_steps=8, width=512, height=512).image
-                painted.append({"picture": image, "file": f"{n}-{variant}.png", "variant": variant, "prompt": prompt, "seed": seed})
-                update(job_id, painted=n + 1)
-            if not PAINTER_TEST:
-                update(job_id, status="done", images=[data_url(picture_png(p["picture"])) for p in painted],
-                       seconds=round(time.time() - started, 1))
-            else:
-                update(job_id, status="done", seconds=round(time.time() - started, 1),
-                       candidates=test_candidates(job_id, jobs[job_id], subject, painted))
-            print(f"job {job_id} ({jobs[job_id]['account']}): {subject!r} in {time.time() - started:.1f}s (agent={from_agent})", flush=True)
+            (run_gauntlet if jobs[job_id].get("kind") == "gauntlet" else run_create)(job_id, model)
         except Exception as error:
             traceback.print_exc()
             update(job_id, status="error", error=str(error)[:200])
 
 
+def run_create(job_id: str, model) -> None:
+    """Create puzzle: the artist's subject (and in the painter test, the words as typed), four pictures."""
+    started = time.time()
+    update(job_id, status="writing")
+    subject, from_agent = subject_for(jobs[job_id]["prompt"], job_id, jobs[job_id]["account"])
+    plan = paint_plan(jobs[job_id]["prompt"], subject)
+    update(job_id, status="painting", subject=subject, agent=from_agent)
+    painted = []
+    for n, (variant, prompt) in enumerate(plan):
+        seed = random.randrange(2**31)
+        image = model.generate_image(seed=seed, prompt=prompt, num_inference_steps=8, width=512, height=512).image
+        painted.append({"picture": image, "file": f"{n}-{variant}.png", "variant": variant, "prompt": prompt, "seed": seed})
+        update(job_id, painted=n + 1)
+    if not PAINTER_TEST:
+        update(job_id, status="done", images=[data_url(picture_png(p["picture"])) for p in painted],
+               seconds=round(time.time() - started, 1))
+    else:
+        update(job_id, status="done", seconds=round(time.time() - started, 1),
+               candidates=test_candidates(job_id, jobs[job_id], subject, painted))
+    print(f"job {job_id} ({jobs[job_id]['account']}): {subject!r} in {time.time() - started:.1f}s (agent={from_agent})", flush=True)
+
+
+def run_gauntlet(job_id: str, model) -> None:
+    """Five word soups, each turned into one subject by the artist and painted once."""
+    started, puzzles = time.time(), []
+    for n in range(GAUNTLET_SIZE):
+        words = soup()
+        update(job_id, status="writing", painted=n)
+        subject, _ = subject_for(" ".join(words), job_id, jobs[job_id]["account"])
+        update(job_id, status="painting", subject=subject)
+        image = model.generate_image(seed=random.randrange(2**31), prompt=f"{subject}, one subject centered, {STYLE}",
+                                     num_inference_steps=8, width=512, height=512).image
+        puzzles.append({"words": words, "subject": subject, "image": data_url(picture_png(image))})
+        update(job_id, painted=n + 1)
+    update(job_id, status="done", puzzles=puzzles, seconds=round(time.time() - started, 1))
+    print(f"gauntlet {job_id} ({jobs[job_id]['account']}): {[p['subject'] for p in puzzles]} in {time.time() - started:.1f}s", flush=True)
+
+
 def public_view(job: dict) -> dict:
     view = {k: job.get(k) for k in ("id", "status", "subject", "agent", "painted", "error", "seconds")}
-    view["total"] = CANDIDATES
+    view["total"] = GAUNTLET_SIZE if job.get("kind") == "gauntlet" else CANDIDATES
     if job["status"] == "queued":
         with lock:
             ahead = [j for j in jobs.values() if j["status"] in ("queued", "writing", "painting") and j["created"] < job["created"]]
         view["ahead"] = len(ahead)
     if job["status"] == "done":
-        if "candidates" in job:
+        if "puzzles" in job:
+            view["puzzles"] = job["puzzles"]
+        elif "candidates" in job:
             view["candidates"] = job["candidates"]
         else:
             view["images"] = job["images"]
@@ -361,7 +404,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path, _ = self.route()
-        if path not in ("/api/login", "/api/logout", "/api/jobs", "/api/puzzles", "/api/messages", "/api/messages/read"):
+        if path not in ("/api/login", "/api/logout", "/api/jobs", "/api/gauntlet", "/api/puzzles", "/api/messages", "/api/messages/read"):
             return self.send(404, {"error": "Not found."})
         data = self.body()
         if data is None:
@@ -379,6 +422,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(*chat.send(db, me["id"], data))
         if path == "/api/messages/read":
             return self.send(*chat.mark_read(db, me["id"], data))
+        if path == "/api/gauntlet":
+            return self.start_job({"prompt": "gauntlet"}, me, kind="gauntlet")
         self.start_job(data, me)
 
     def login(self, data: dict) -> None:
@@ -391,7 +436,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(401, {"error": "That name and password don't match."})
         self.send(200, session)
 
-    def start_job(self, data: dict, me: dict) -> None:
+    def start_job(self, data: dict, me: dict, kind: str = "create") -> None:
         prompt = " ".join(str(data.get("prompt", "")).split())[:MAX_PROMPT]
         if not prompt:
             return self.send(400, {"error": "Describe what you'd like to make."})
@@ -401,7 +446,7 @@ class Handler(BaseHTTPRequestHandler):
             if sum(j["status"] in ("queued", "writing", "painting") for j in jobs.values()) >= MAX_WAITING:
                 return self.send(429, {"error": "Busy right now. Try again in a minute."})
             job_id = uuid.uuid4().hex
-            jobs[job_id] = {"id": job_id, "prompt": prompt, "account": me["name"], "status": "queued", "painted": 0, "created": time.time()}
+            jobs[job_id] = {"id": job_id, "kind": kind, "prompt": prompt, "account": me["name"], "status": "queued", "painted": 0, "created": time.time()}
             for old in sorted(jobs.values(), key=lambda j: j["created"])[:-KEEP_JOBS]:
                 if old["status"] in ("done", "error"):
                     del jobs[old["id"]]

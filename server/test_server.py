@@ -6,6 +6,7 @@
 import contextlib
 import io
 import json
+import random
 import os
 import tempfile
 import threading
@@ -588,6 +589,55 @@ class PainterTestTest(unittest.TestCase):
         plain = {"id": "c" * 32, "status": "done", "created": 0, "images": ["data:a"]}
         self.assertEqual(server.public_view(plain)["images"], ["data:a"])
         self.assertNotIn("candidates", server.public_view(plain))
+
+
+class GauntletTest(Harness):
+    """The gauntlet: word soups, the job that paints five, and its endpoint."""
+
+    def test_a_soup_is_three_to_five_different_familiar_words(self):
+        rng = random.Random(3)
+        known = {w for group in ("describers", "creatures", "things", "doings") for w in server.WORDS[group]}
+        for _ in range(200):
+            words = server.soup(rng)
+            self.assertTrue(3 <= len(words) <= 5, words)
+            self.assertEqual(len(set(words)), len(words), "no word twice")
+            self.assertTrue(set(words) <= known)
+            self.assertTrue(set(words) & set(server.WORDS["describers"]), "a describer")
+            self.assertTrue(set(words) & set(server.WORDS["creatures"] + server.WORDS["things"]), "something to draw")
+
+    def test_a_gauntlet_job_writes_and_paints_five_puzzles(self):
+        from PIL import Image
+
+        class Painted:
+            def __init__(self):
+                self.prompts = []
+
+            def generate_image(self, seed, prompt, **_):
+                self.prompts.append(prompt)
+                return type("Result", (), {"image": Image.new("RGB", (512, 512), (200, 40, 40))})()
+
+        model, job_id = Painted(), "f" * 32
+        server.jobs[job_id] = {"id": job_id, "kind": "gauntlet", "prompt": "gauntlet", "account": "bob", "status": "queued", "painted": 0, "created": 0}
+        with mock.patch.object(server, "USE_AGENT", False), contextlib.redirect_stdout(io.StringIO()):
+            server.run_gauntlet(job_id, model)
+        view = server.public_view(server.jobs[job_id])
+        self.assertEqual((view["status"], view["painted"], view["total"]), ("done", 5, 5))
+        self.assertEqual(len(view["puzzles"]), 5)
+        for puzzle, prompt in zip(view["puzzles"], model.prompts):
+            self.assertEqual(puzzle["subject"], " ".join(puzzle["words"]), "without the artist, the soup itself")
+            self.assertEqual(prompt, f"{puzzle['subject']}, one subject centered, {server.STYLE}")
+            self.assertTrue(puzzle["image"].startswith("data:image/png;base64,"))
+        del server.jobs[job_id]
+
+    def test_starting_a_gauntlet_needs_an_account_and_the_picture_model(self):
+        self.assertEqual(self.call("POST", "/api/gauntlet", {}, token="")[0], 401)
+        self.assertEqual(self.call("POST", "/api/gauntlet", {}, token=self.bob)[0], 503, "no picture model in tests")
+        with mock.patch.dict(server.model_state, status="ready"), mock.patch.object(server.waiting, "put") as queued:
+            status, body = self.call("POST", "/api/gauntlet", {}, token=self.bob)
+        self.assertEqual(status, 202)
+        self.assertEqual(server.jobs[body["id"]]["kind"], "gauntlet")
+        queued.assert_called_once_with(body["id"])
+        del server.jobs[body["id"]]
 
 
 if __name__ == "__main__":

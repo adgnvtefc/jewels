@@ -2,6 +2,7 @@ import { createPuzzle, select, transfer, correctCount, restore, shelfAction, con
 import { builtInPuzzles, customPuzzles, addCustom, removeCustom, progress, thumbnail, readSave, writeSave, snapshot, mergeSaves, storeSnapshot, packSaves, unpackSaves, useProfile, withProfile, clearProfile, forget, jewelsHome, syncMeta } from './library.js';
 import { currentAccount, online, friendName, displayName, takeOldPassword, whenSignedOut, signIn, signOut, api } from './account.js';
 import { createMaker } from './create.js';
+import { createGauntlet } from './gauntlet.js';
 import { syncAccount, unsent } from './sync.js';
 import { createChat } from './chat.js';
 const $ = id => document.getElementById(id);
@@ -399,6 +400,7 @@ async function move(kind, index) {
   if (correctCount(art, state) === total) {
     track('level_complete', { puzzle: art.id, title: art.title, custom: !builtIns.some(a => a.id === art.id), moves: state.moves, colors: art.colors.length, jewels: total });
     syncSoon(0);
+    if (returnTo === 'gauntlet') return gauntlet.finished(art);
     const heading = art.id === 'love-garden-v1' ? 'Made with love.' : esc(art.title);
     const eyebrow = level === null ? 'EVERY JEWEL, BACK HOME' : `LEVEL ${level + 1} COMPLETE`;
     // However the dialog closes, a finished puzzle returns to the start screen.
@@ -517,8 +519,9 @@ function openPuzzle(next, levelIndex = null, from = null) {
     ? continueSelection(art,state,{kind:'color',color:saved.selectedColor,cells:[]}) : null;
   cursor = 0; keyboard = false; zoom = 1; ox = oy = 0;
   constrain(); update();
-  $('puzzleName').textContent = `${level === null ? '' : `Level ${level + 1} · `}${art.title}`;
-  message(`${level === null ? '' : `Level ${level + 1}: `}${art.title}. Tap a jewel group, then the shelf.`);
+  const where = level !== null ? `Level ${level + 1}` : returnTo === 'gauntlet' ? gauntlet.label(art) : null;
+  $('puzzleName').textContent = `${where ? `${where} · ` : ''}${art.title}`;
+  message(`${where ? `${where}: ` : ''}${art.title}. Tap a jewel group, then the shelf.`);
 }
 
 // Free play: the bonus puzzles, puzzles sent to you, pictures you created, and the way to make more.
@@ -543,12 +546,13 @@ function removable(puzzle) {
 }
 function freePlay() {
   const all = customPuzzles(), sent = all.filter(a => a.from), mine = all.filter(a => !a.from);
-  show(`<p class="eyebrow">FREE PLAY</p>${bonus.length ? '<h2>Bonus</h2><div class="puzzle-list" id="bonusList"></div>' : ''}${sent.length ? '<h2>Sent to you</h2><div class="puzzle-list" id="sentList"></div>' : ''}<h2>Your puzzles</h2>${mine.length ? '<div class="puzzle-list" id="puzzleList"></div>' : '<p>Nothing here yet. Describe a picture and it becomes a puzzle.</p>'}<button class="primary" id="createOwn">✦ Create your own</button>`);
+  show(`<p class="eyebrow">FREE PLAY</p>${bonus.length ? '<h2>Bonus</h2><div class="puzzle-list" id="bonusList"></div>' : ''}${sent.length ? '<h2>Sent to you</h2><div class="puzzle-list" id="sentList"></div>' : ''}<h2>Your puzzles</h2>${mine.length ? '<div class="puzzle-list" id="puzzleList"></div>' : '<p>Nothing here yet. Describe a picture and it becomes a puzzle.</p>'}<button class="primary" id="createOwn">✦ Create your own</button><button class="home-button" id="gauntletStart">⚔ Gauntlet: 5 surprise puzzles</button>`);
   if (bonus.length) seeBonus();
   for (const puzzle of bonus) $('bonusList').append(puzzleCard(puzzle));
   for (const puzzle of sent) $('sentList').append(removable(puzzle));
   for (const puzzle of mine) $('puzzleList').append(removable(puzzle));
   $('createOwn').onclick = maker.start;
+  $('gauntletStart').onclick = () => gauntlet.start();
 }
 $('freePlay').onclick = freePlay;
 $('createHome').onclick = () => maker.start();
@@ -717,12 +721,26 @@ window.visualViewport?.addEventListener('resize', () => document.documentElement
 for (const type of ['gesturestart', 'gesturechange']) document.addEventListener?.(type, e => e.preventDefault(), { passive: false });
 
 // Making a puzzle: the same pop-up from the start screen, Free play and the chat (create.js).
+// Keep a newly made puzzle in Free play and send it to the server.
+const keepMade = puzzle => { if (customPuzzles().some(a => a.id === puzzle.id)) return true; if (!addCustom(puzzle)) return false; syncSoon(0); return true; };
 const maker = createMaker({
   $, show, esc, thumbnail, track,
-  keep: puzzle => { if (customPuzzles().some(a => a.id === puzzle.id)) return true; if (!addCustom(puzzle)) return false; syncSoon(0); return true; },
+  keep: keepMade,
   play: puzzle => openPuzzle(puzzle, null, $('chat').hidden ? null : 'chat'),
   freePlay,
   signIn: (note, then) => signInPrompt({ note, then }),
+});
+
+// The gauntlet: five word-soup puzzles in a row, from Free play (gauntlet.js).
+const gauntlet = createGauntlet({
+  $, show, esc, thumbnail, track,
+  find: id => customPuzzles().find(a => a.id === id),
+  done: puzzle => progress(puzzle) === 1,
+  movesOf: puzzle => readSave(puzzle.id)?.moves || 0,
+  keep: keepMade,
+  play: puzzle => openPuzzle(puzzle, null, 'gauntlet'),
+  signIn: (note, then) => signInPrompt({ note, then }),
+  home: goHome,
 });
 
 // The old Add to Home Screen pop-up is gone; forget whether it was shown.

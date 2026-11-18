@@ -51,13 +51,13 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
   const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
   elements = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(([, id]) => [id, element()]));
   const source = `const {${Object.keys(game)}} = game;\n`
-    + ['./convert.js', './account.js', './library.js', './generator.js', './sync.js', './chat.js', './create.js'].map(inline).join('\n')
+    + ['./convert.js', './account.js', './library.js', './generator.js', './sync.js', './chat.js', './create.js', './gauntlet.js'].map(inline).join('\n')
     + readFileSync(new URL('./app.js', import.meta.url), 'utf8').replace(/^import .*$/gm, '');
   const store = { ...stored }, sorting = 'little-jewel:sorting-v2:', calls = [];
   const running = runInNewContext(`(async () => {
     ${source}
     return { view: () => ({zoom, ox, oy}), isBusy: () => busy, sparkles: () => sparkles.map(s => s.i),
-      ripples: () => ripples.map(r => ({ cells: r.cells.map(c => c.i), from: r.cells.find(c => c.delay === 0).i })) };
+      gauntlet, openPuzzle, ripples: () => ripples.map(r => ({ cells: r.cells.map(c => c.i), from: r.cells.find(c => c.delay === 0).i })) };
   })()`, {
     game, console, window: { devicePixelRatio: 1 },
     document: { getElementById: id => elements[id] ?? null, createElement: element, body: element(), visibilityState: 'visible', addEventListener() {} },
@@ -427,6 +427,58 @@ test('a puzzle made from the chat can go straight to the chat; one made from the
   assert.equal(message.body.puzzle, upload.body.art.id, 'then the chat message with that puzzle');
   assert.ok(made(t).some(a => a.id === upload.body.art.id), 'and it stays in Free play');
   assert.equal(events.filter(([name]) => name === 'made_puzzle').at(-1)[1].choice, 'send');
+});
+
+test('gauntlet: five word-soup puzzles go into Free play and play one after another, and a run can be continued', async () => {
+  const soups = [['tiny', 'cat'], ['frozen', 'teapot', 'in space'], ['shy', 'owl', 'donut'], ['purple', 'robot', 'kite', 'moon'], ['golden', 'frog', 'crown']];
+  const jobs = { n: 0 }, events = [];
+  const server = (method, path, body) => {
+    if (path === '/api/gauntlet' && method === 'POST') { jobs.n++; return [202, { id: `g${jobs.n}` }]; }
+    if (path.startsWith('/api/jobs/')) return [200, { status: 'done', seconds: 9, total: 5, puzzles: soups.map(words => ({ words, subject: words.join(' '), image: 'data:x' })) }];
+    if (path === '/api/puzzles') return [201, { ok: true }];
+    return fakeServer()(method, path, body);
+  };
+  const t = await mount({ stored: signedIn, server, catseye: (name, data) => events.push([name, data]) });
+  await tick();
+  t.elements.freePlay.onclick();
+  t.elements.gauntletStart.onclick();
+  for (let i = 0; i < 300 && t.elements.game.hidden !== false; i++) await tick(10);
+  assert.equal(jobs.n, 1, 'one request for all five');
+  const saved = made(t);
+  assert.deepEqual(saved.map(a => a.title).reverse(), ['Tiny, cat', 'Frozen, teapot, in space', 'Shy, owl, donut', 'Purple, robot, kite, moon', 'Golden, frog, crown'], 'titled with their words, all in Free play');
+  assert.equal(t.elements.puzzleName.textContent, 'Gauntlet 1 of 5 · Tiny, cat');
+  assert.deepEqual(events.find(([name]) => name === 'gauntlet_start')[1].soups, soups.map(w => w.join(' ')));
+  // Finish the first: the pop-up offers the next one.
+  const [first, second] = [...saved].reverse();
+  t.store[`little-jewel:bob:sorting-v2:${first.id}`] = JSON.stringify({ board: first.pixels, shelf: Array(24).fill(-1), moves: 7 });
+  t.app.gauntlet.finished(first);
+  assert.match(t.elements.modalContent.markup, /GAUNTLET · 1 OF 5 DONE/);
+  t.elements.gauntletNext.onclick();
+  assert.equal(t.elements.puzzleName.textContent, 'Gauntlet 2 of 5 · Frozen, teapot, in space');
+  // Leave, and come back later: the run continues where it stopped.
+  t.elements.menu.onclick();
+  t.elements.freePlay.onclick();
+  t.elements.gauntletStart.onclick();
+  assert.match(t.elements.modalContent.markup, /Puzzle 2 of 5 is waiting/);
+  t.elements.gauntletGo.onclick();
+  assert.equal(t.elements.puzzleName.textContent, 'Gauntlet 2 of 5 · Frozen, teapot, in space');
+  // All five done: the run ends with a summary, and the next tap starts a new gauntlet.
+  for (const [n, art] of [...saved].reverse().entries()) t.store[`little-jewel:bob:sorting-v2:${art.id}`] = JSON.stringify({ board: art.pixels, shelf: Array(24).fill(-1), moves: n + 1 });
+  t.app.gauntlet.finished(second);
+  assert.match(t.elements.modalContent.markup, /GAUNTLET COMPLETE/);
+  assert.match(t.elements.modalContent.markup, /15 moves in all/);
+  t.elements.gauntletHome.onclick();
+  t.elements.freePlay.onclick();
+  t.elements.gauntletStart.onclick();
+  for (let i = 0; i < 100 && jobs.n < 2; i++) await tick(10);
+  assert.equal(jobs.n, 2, 'a finished run starts a new gauntlet');
+});
+
+test('the gauntlet needs an account', async () => {
+  const t = await mount();
+  t.elements.freePlay.onclick();
+  t.elements.gauntletStart.onclick();
+  assert.match(t.elements.modalContent.markup, /The gauntlet needs an account/);
 });
 
 test('a guest who taps Create puzzle on the start screen is asked to sign in first', async () => {

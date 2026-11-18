@@ -8,6 +8,14 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 // Resolves with the candidate pictures; onStatus hears each step along the way.
 export async function generate(prompt, onStatus) {
   const { id } = await request('/api/jobs', { method: 'POST', body: { prompt } });
+  return follow(id, onStatus);
+}
+// A gauntlet: five word-soup pictures (job.puzzles: [{ words, subject, image }]).
+export async function generateGauntlet(onStatus) {
+  const { id } = await request('/api/gauntlet', { method: 'POST', body: {} });
+  return follow(id, onStatus);
+}
+async function follow(id, onStatus) {
   for (;;) {
     await pause(1500);
     const job = await request(`/api/jobs/${id}`);
