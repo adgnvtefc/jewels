@@ -51,13 +51,13 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
   const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
   elements = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(([, id]) => [id, element()]));
   const source = `const {${Object.keys(game)}} = game;\n`
-    + ['./convert.js', './account.js', './library.js', './generator.js', './sync.js', './chat.js', './create.js', './gauntlet.js'].map(inline).join('\n')
+    + ['./convert.js', './account.js', './library.js', './generator.js', './sync.js', './chat.js', './create.js', './gauntlet.js', './dialog.js', './settings.js', './freeplay.js', './gallery.js', './account-ui.js', './board.js'].map(inline).join('\n')
     + readFileSync(new URL('./app.js', import.meta.url), 'utf8').replace(/^import .*$/gm, '');
   const store = { ...stored }, sorting = 'little-jewel:sorting-v2:', calls = [];
   const running = runInNewContext(`(async () => {
     ${source}
-    return { view: () => ({zoom, ox, oy}), isBusy: () => busy, sparkles: () => sparkles.map(s => s.i),
-      gauntlet, openPuzzle, ripples: () => ripples.map(r => ({ cells: r.cells.map(c => c.i), from: r.cells.find(c => c.delay === 0).i })) };
+    return { view: () => board.inspect().view, isBusy: () => board.isBusy(), sparkles: () => board.inspect().sparkles,
+      gauntlet, openPuzzle, ripples: () => board.inspect().ripples };
   })()`, {
     game, console, window: { devicePixelRatio: 1 },
     document: { getElementById: id => elements[id] ?? null, createElement: element, body: element(), visibilityState: 'visible', addEventListener() {} },
