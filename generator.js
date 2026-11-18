@@ -1,18 +1,18 @@
-// Makes pictures with the generator on the Mac (server/), for signed-in players, and
-// turns a chosen picture into puzzle art in the browser.
+// Asks the Mac (server/generator.py) for puzzles, for signed-in players.
 import { convertImage } from './convert.js';
 import { request, ServerError } from './account.js';
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-// Resolves with the candidate pictures; onStatus hears each step along the way.
-export async function generate(prompt, onStatus) {
-  const { id } = await request('/api/jobs', { method: 'POST', body: { prompt } });
-  return follow(id, onStatus);
-}
-// A gauntlet: five word-soup pictures (job.puzzles: [{ words, subject, image }]).
-export async function generateGauntlet(onStatus) {
-  const { id } = await request('/api/gauntlet', { method: 'POST', body: {} });
+// Asks the Mac for puzzles and resolves with the finished job; onStatus hears each step.
+//   requestPuzzles('create', idea)  → job.candidates: [{ variant, art }], four to choose from
+//   requestPuzzles('gauntlet')       → job.puzzles: [{ words, subject, art }], five in a row
+// The Mac makes the puzzle art itself (server/generator.py); pictureToArt is only for
+// pictures from an older server.
+export async function requestPuzzles(kind, idea, onStatus) {
+  const { id } = kind === 'gauntlet'
+    ? await request('/api/gauntlet', { method: 'POST', body: {} })
+    : await request('/api/jobs', { method: 'POST', body: { prompt: idea } });
   return follow(id, onStatus);
 }
 async function follow(id, onStatus) {

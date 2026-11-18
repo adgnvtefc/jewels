@@ -9,7 +9,9 @@ import json
 import random
 import os
 import tempfile
+import subprocess
 import threading
+import uuid
 import unittest
 import urllib.error
 import urllib.request
@@ -26,10 +28,13 @@ os.environ.update(DB_FILE=str(Path(TEMP.name) / "test.db"), USE_MODEL="0", USE_A
 import accounts  # noqa: E402
 import chat  # noqa: E402
 import gauntlets  # noqa: E402
+import generator  # noqa: E402
 import saves  # noqa: E402
 import server  # noqa: E402
 import texts  # noqa: E402
 from db import Database  # noqa: E402
+
+ROOT = Path(__file__).resolve().parent.parent
 
 LEVEL = next(iter(saves.shipped().values()))  # the first level
 
@@ -505,136 +510,186 @@ class TextTest(Harness):
         self.assertEqual(len(self.texts), 1 + self.db.one("SELECT count(*) FROM accounts")[0])
 
 
-class PainterTestTest(unittest.TestCase):
-    """The painter test: what gets painted, the painter's art, and the shuffled order kept."""
+class FakeModel:
+    """Stands in for Z-Image: a red ball on white, and a note of every prompt."""
+
+    def __init__(self, broken=False):
+        self.prompts, self.broken = [], broken
+
+    def generate_image(self, seed, prompt, **_):
+        from PIL import Image, ImageDraw
+        if self.broken:
+            raise RuntimeError("out of memory")
+        self.prompts.append(prompt)
+        picture = Image.new("RGB", (512, 512), (250, 250, 250))
+        ImageDraw.Draw(picture).ellipse((140, 140, 372, 372), fill=(220, 40, 40), outline=(30, 30, 40), width=12)
+        return type("Result", (), {"image": picture})()
+
+
+def valid(art):
+    return saves.valid_art({**art, "id": "custom-test1"}) is not None
+
+
+class GeneratorTest(unittest.TestCase):
+    """generator.py: the pipelines and their steps."""
     IDEA, SUBJECT = "a sleepy cat", "a curled gray cat with closed eyes"
 
-    @staticmethod
-    def ball(color=(220, 40, 40)):
-        from PIL import Image, ImageDraw
-        picture = Image.new("RGB", (512, 512), (250, 250, 250))
-        ImageDraw.Draw(picture).ellipse((140, 140, 372, 372), fill=color, outline=(30, 30, 40), width=12)
-        return picture
+    def setUp(self):
+        self.agent = mock.patch.object(generator, "USE_AGENT", False)
+        self.agent.start()
 
-    def test_off_all_four_come_from_the_artist(self):
-        with mock.patch.object(server, "PAINTER_TEST", False):
-            plan = server.paint_plan(self.IDEA, self.SUBJECT)
-        self.assertEqual([v for v, _ in plan], ["current"] * 4)
-        self.assertTrue(all(p.startswith(self.SUBJECT + ", one subject centered, flat vector") for _, p in plan))
+    def tearDown(self):
+        self.agent.stop()
 
-    def test_on_two_rewritten_and_two_as_typed_with_the_same_style_line(self):
-        with mock.patch.object(server, "PAINTER_TEST", True):
-            plan = server.paint_plan(self.IDEA, self.SUBJECT)
-        self.assertEqual([v for v, _ in plan], ["current", "current", "painter", "painter"])
-        self.assertTrue(plan[0][1].startswith(self.SUBJECT + ", one subject centered, "))
-        self.assertTrue(plan[2][1].startswith(self.IDEA + ", one subject centered, "), "the player's words, untouched")
-        self.assertEqual(plan[0][1].split("centered, ")[1], plan[2][1].split("centered, ")[1])
+    def test_create_plan_is_all_current_or_in_the_test_two_of_each_shuffled(self):
+        with mock.patch.object(generator, "PAINTER_TEST", False):
+            self.assertEqual(generator.create_plan(), ["current"] * 4)
+        with mock.patch.object(generator, "PAINTER_TEST", True):
+            plans = {tuple(generator.create_plan()) for _ in range(40)}
+        self.assertTrue(all(sorted(p) == ["current", "current", "painter", "painter"] for p in plans))
+        self.assertGreater(len(plans), 1, "not always the same order")
 
-    def test_the_cleanup_makes_valid_calm_art_and_leaves_the_background_alone(self):
-        import numpy as np
-        palette = np.array([[255, 255, 255], [200, 30, 30], [203, 32, 31], [20, 20, 30], [40, 200, 60]])
-        grid = np.zeros((32, 32), int)
-        grid[8:24, 8:24] = 1
-        grid[8:24, 16:24] = 2      # nearly the same red: merged into one
-        grid[4, 4] = 3             # a lone speck on the background: cleared
-        grid[12:14, 12:14] = 4     # a small green patch: kept
-        art = server.painting.art_from_grid(grid, palette, "A red square")
-        self.assertIsNotNone(saves.valid_art({**art, "id": "custom-abc"}))
-        self.assertEqual(sorted(art["colors"]), ["#28c83c", "#cb201f", "#ffffff"], "the two reds merged into the commoner")
-        self.assertEqual(art["pixels"][0], art["colors"].index("#ffffff"), "white background")
-        self.assertIsNone(server.painting.art_from_grid(np.zeros((32, 32), int), palette, "Blank"), "one color is no puzzle")
-
-    @unittest.skipUnless(server.PAINTER_DIR.joinpath("painter.py").exists(), "painter v3 isn't on this machine")
-    def test_painter_v3_turns_a_full_picture_into_valid_puzzle_art(self):
-        found = server.candidate("painter", self.ball(), "a red ball")
-        self.assertEqual(found["variant"], "painter")
-        art = found["art"]
-        self.assertEqual(art["title"], "A red ball")
-        self.assertIsNotNone(saves.valid_art({**art, "id": "custom-ball1"}))
-        self.assertLessEqual(len(art["colors"]), server.PAINTER_COLORS)
-
-    def test_if_the_painter_fails_the_picture_goes_to_the_browser_marked_as_such(self):
-        with mock.patch.object(server.painting, "painted_puzzle", side_effect=RuntimeError("no model")), \
-                contextlib.redirect_stderr(io.StringIO()):
-            found = server.candidate("painter", self.ball(), "a red ball")
-        self.assertEqual(found["variant"], "painter-failed")
-        self.assertTrue(found["image"].startswith("data:image/png;base64,"))
-        self.assertTrue(server.candidate("current", self.ball(), "a red ball")["image"].startswith("data:image/png"))
-
-    def test_candidates_are_shuffled_and_the_order_shown_is_kept(self):
-        art = {"title": "A sleepy cat", "width": 32, "height": 32, "colors": ["#ffffff", "#000000"], "pixels": [0, 1] * 512}
-        painted = [{"picture": self.ball((n * 60, 40, 40)), "file": f"{n}-{v}.png", "variant": v, "prompt": f"p{n}", "seed": 100 + n}
-                   for n, v in enumerate(["current", "current", "painter", "painter"])]
-        orders = set()
-        with tempfile.TemporaryDirectory() as folder, mock.patch.object(server, "PAINTER_TEST_DIR", Path(folder)), \
-                mock.patch.object(server.painting, "painted_puzzle", return_value=art):
-            for n in range(12):
-                job_id = f"{n:032x}"
-                shown = server.test_candidates(job_id, {"prompt": self.IDEA, "account": "bob"}, self.SUBJECT, painted)
-                orders.add(tuple(c["variant"] for c in shown))
-                self.assertEqual(sorted(c["variant"] for c in shown), ["current", "current", "painter", "painter"])
-                self.assertTrue(all(("art" in c) == (c["variant"] == "painter") for c in shown), "art for painter, a picture otherwise")
-                kept = json.loads((Path(folder) / job_id / "job.json").read_text())
-                self.assertEqual([k["variant"] for k in kept["shown"]], [c["variant"] for c in shown], "saved in the order shown")
-                self.assertEqual([k["position"] for k in kept["shown"]], [1, 2, 3, 4])
-                self.assertEqual(sorted(k["seed"] for k in kept["shown"]), [100, 101, 102, 103])
-                self.assertEqual(kept["subject"], self.SUBJECT)
-                self.assertTrue(all((Path(folder) / job_id / k["file"]).exists() for k in kept["shown"]), "the full pictures")
-                self.assertTrue(all("art" in k for k in kept["shown"] if k["variant"] == "painter"))
-        self.assertGreater(len(orders), 1, "not always the same order")
-
-    def test_a_finished_job_sends_candidates_in_the_test_and_images_otherwise(self):
-        test = {"id": "b" * 32, "status": "done", "created": 0, "candidates": [{"variant": "painter", "art": {}}]}
-        self.assertEqual(server.public_view(test)["candidates"], test["candidates"])
-        self.assertNotIn("images", server.public_view(test))
-        plain = {"id": "c" * 32, "status": "done", "created": 0, "images": ["data:a"]}
-        self.assertEqual(server.public_view(plain)["images"], ["data:a"])
-        self.assertNotIn("candidates", server.public_view(plain))
-
-
-class GauntletTest(Harness):
-    """The gauntlet: word soups, the job that paints five, and its endpoint."""
+    def test_wording_as_typed_through_the_artist_or_as_a_word_soup(self):
+        self.assertEqual(generator.wording("painter", self.IDEA, "bob", "t"), {"subject": self.IDEA, "agent": False, "title": "A sleepy cat"})
+        with mock.patch.object(generator, "artist", return_value=(self.SUBJECT, True)) as artist:
+            self.assertEqual(generator.wording("current", self.IDEA, "bob", "t")["subject"], self.SUBJECT)
+            artist.assert_called_once_with(self.IDEA, "t", "bob")
+            words = generator.wording("soup", "", "bob", "t")
+        self.assertTrue(3 <= len(words["words"]) <= 5)
+        self.assertEqual(artist.call_args[0][0], " ".join(words["words"]), "the artist blends the soup")
+        self.assertEqual(words["title"], generator.title_for(", ".join(words["words"]), 80))
 
     def test_a_soup_is_three_to_five_different_familiar_words(self):
         rng = random.Random(3)
-        known = {w for group in ("describers", "creatures", "things", "doings") for w in server.WORDS[group]}
+        known = {w for group in ("describers", "creatures", "things", "doings") for w in generator.WORDS[group]}
         for _ in range(200):
-            words = server.soup(rng)
+            words = generator.soup(rng)
             self.assertTrue(3 <= len(words) <= 5, words)
             self.assertEqual(len(set(words)), len(words), "no word twice")
             self.assertTrue(set(words) <= known)
-            self.assertTrue(set(words) & set(server.WORDS["describers"]), "a describer")
-            self.assertTrue(set(words) & set(server.WORDS["creatures"] + server.WORDS["things"]), "something to draw")
+            self.assertTrue(set(words) & set(generator.WORDS["describers"]), "a describer")
+            self.assertTrue(set(words) & set(generator.WORDS["creatures"] + generator.WORDS["things"]), "something to draw")
 
-    def test_a_gauntlet_job_writes_and_paints_five_puzzles(self):
+    def test_the_server_converts_exactly_as_the_browser_did(self):
+        picture = FakeModel().generate_image(1, "x").image
+        png = generator.picture_png(picture)
+        art = generator.converter.convert(png, "A red ball")
+        self.assertTrue(valid(art))
+        self.assertEqual(art["title"], "A red ball")
+        # The browser decoded the same 256 px PNG and ran convert.js on its pixels.
         from PIL import Image
+        with tempfile.TemporaryDirectory() as folder:
+            Image.open(io.BytesIO(png)).convert("RGBA").save(Path(folder) / "p.png")
+            (Path(folder) / "p.rgba").write_bytes(Image.open(Path(folder) / "p.png").tobytes())
+            script = (f"import {{ convertImage }} from '{(ROOT / 'convert.js').as_uri()}'; import {{ readFileSync }} from 'node:fs';"
+                      f"const a = convertImage(new Uint8ClampedArray(readFileSync('{Path(folder) / 'p.rgba'}')), 256, 256, {{ title: 'A red ball' }});"
+                      "delete a.id; console.log(JSON.stringify(a));")
+            browser = json.loads(subprocess.run([generator.find_node(), "--input-type=module", "-e", script],
+                                                capture_output=True, text=True, check=True).stdout)
+        self.assertEqual(art, browser)
 
-        class Painted:
-            def __init__(self):
-                self.prompts = []
+    def test_the_converter_starts_again_if_its_process_dies(self):
+        png = generator.picture_png(FakeModel().generate_image(1, "x").image)
+        generator.converter.convert(png, "One")
+        generator.converter.process.kill()
+        generator.converter.process.wait()
+        self.assertTrue(valid(generator.converter.convert(png, "Two")))
 
-            def generate_image(self, seed, prompt, **_):
-                self.prompts.append(prompt)
-                return type("Result", (), {"image": Image.new("RGB", (512, 512), (200, 40, 40))})()
+    @unittest.skipUnless(generator.PAINTER_DIR.joinpath("painter-v3.safetensors").exists(), "painter v3's weights aren't on this machine")
+    def test_painter_v3_turns_a_full_picture_into_valid_puzzle_art(self):
+        variant, art = generator.puzzle("painter", FakeModel().generate_image(1, "x").image, "A red ball")
+        self.assertEqual(variant, "painter")
+        self.assertTrue(valid(art))
+        self.assertLessEqual(len(art["colors"]), generator.PAINTER_COLORS)
 
-        model, job_id = Painted(), "f" * 32
-        server.jobs[job_id] = {"id": job_id, "kind": "gauntlet", "prompt": "gauntlet", "account": "bob", "status": "queued", "painted": 0, "created": 0}
-        with mock.patch.object(server, "USE_AGENT", False), contextlib.redirect_stdout(io.StringIO()):
-            server.run_gauntlet(job_id, model)
-        view = server.public_view(server.jobs[job_id])
+    def test_if_the_painter_fails_convert_js_makes_it_marked_as_such(self):
+        with mock.patch.object(generator.painting, "painted_puzzle", side_effect=RuntimeError("no model")), \
+                contextlib.redirect_stderr(io.StringIO()):
+            variant, art = generator.puzzle("painter", FakeModel().generate_image(1, "x").image, "A red ball")
+        self.assertEqual(variant, "painter-failed")
+        self.assertTrue(valid(art))
+
+    def test_a_candidate_is_painted_with_the_style_line_and_comes_back_as_puzzle_art(self):
+        model = FakeModel()
+        made = generator.Generator(model).make("current", {"subject": self.SUBJECT, "agent": True, "title": "A sleepy cat"})
+        self.assertEqual(model.prompts, [f"{self.SUBJECT}, one subject centered, {generator.STYLE}"])
+        self.assertEqual((made["variant"], made["subject"], made["prompt"]), ("current", self.SUBJECT, model.prompts[0]))
+        self.assertTrue(valid(made["art"]))
+        self.assertEqual(generator.shown(made), {"variant": "current", "art": made["art"]}, "the browser gets the puzzle only")
+
+    def test_a_test_job_keeps_its_pictures_and_where_each_was_shown(self):
+        maker = generator.Generator(FakeModel())
+        made = [maker.make(name, generator.wording(name, self.IDEA, "bob", "t")) for name in ("painter", "current")]
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(generator, "PAINTER_TEST_DIR", Path(folder)), \
+                mock.patch.object(generator.painting, "painted_puzzle", return_value=made[1]["art"]):
+            generator.save_test_job("a" * 32, {"prompt": self.IDEA, "account": "bob"}, self.SUBJECT, made)
+            kept = json.loads((Path(folder) / ("a" * 32) / "job.json").read_text())
+            self.assertTrue(all((Path(folder) / ("a" * 32) / k["file"]).exists() for k in kept["shown"]))
+        self.assertEqual([(k["position"], k["variant"]) for k in kept["shown"]], [(1, made[0]["variant"]), (2, "current")])
+        self.assertTrue(all("art" in k and "seed" in k and "prompt" in k for k in kept["shown"]))
+
+
+class JobTest(Harness):
+    """Create puzzle and the gauntlet as jobs, through the generator."""
+
+    def setUp(self):
+        super().setUp()
+        self.patches = [mock.patch.object(generator, "USE_AGENT", False)]
+        for patch in self.patches:
+            patch.start()
+
+    def tearDown(self):
+        for patch in self.patches:
+            patch.stop()
+
+    def job(self, kind="create", prompt="a red ball"):
+        job_id = uuid.uuid4().hex
+        server.jobs[job_id] = {"id": job_id, "kind": kind, "prompt": prompt, "account": "bob", "status": "queued", "painted": 0, "created": 0}
+        return job_id
+
+    def run_job(self, job_id, model=None):
+        maker = generator.Generator(model or FakeModel())
+        with contextlib.redirect_stdout(io.StringIO()):
+            (server.run_gauntlet if server.jobs[job_id]["kind"] == "gauntlet" else server.run_create)(job_id, maker)
+        return server.public_view(server.jobs.pop(job_id))
+
+    def test_create_puzzle_sends_four_finished_puzzles(self):
+        with mock.patch.object(generator, "PAINTER_TEST", False):
+            view = self.run_job(self.job())
+        self.assertEqual((view["status"], view["painted"], view["total"]), ("done", 4, 4))
+        self.assertEqual([c["variant"] for c in view["candidates"]], ["current"] * 4)
+        self.assertTrue(all(valid(c["art"]) and c["art"]["title"] == "A red ball" for c in view["candidates"]))
+        self.assertNotIn("images", view, "never pictures")
+
+    def test_in_the_painter_test_two_of_each_are_shuffled_and_the_job_kept(self):
+        art = {"title": "A red ball", "width": 32, "height": 32, "colors": ["#ffffff", "#000000"], "pixels": [0, 1] * 512}
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(generator, "PAINTER_TEST", True), \
+                mock.patch.object(generator, "PAINTER_TEST_DIR", Path(folder)), \
+                mock.patch.object(generator.painting, "painted_puzzle", return_value=art):
+            job_id = self.job()
+            model = FakeModel()
+            view = self.run_job(job_id, model)
+            kept = json.loads((Path(folder) / job_id / "job.json").read_text())
+        self.assertEqual(sorted(c["variant"] for c in view["candidates"]), ["current", "current", "painter", "painter"])
+        self.assertEqual([k["variant"] for k in kept["shown"]], [c["variant"] for c in view["candidates"]], "saved in the order shown")
+        self.assertEqual(sum(p.startswith("a red ball, one subject centered") for p in model.prompts), 4, "without the artist, all from the words")
+
+    def test_a_gauntlet_is_five_word_soup_puzzles(self):
+        model = FakeModel()
+        view = self.run_job(self.job("gauntlet", "gauntlet"), model)
         self.assertEqual((view["status"], view["painted"], view["total"]), ("done", 5, 5))
-        self.assertEqual(len(view["puzzles"]), 5)
         for puzzle, prompt in zip(view["puzzles"], model.prompts):
             self.assertEqual(puzzle["subject"], " ".join(puzzle["words"]), "without the artist, the soup itself")
-            self.assertEqual(prompt, f"{puzzle['subject']}, one subject centered, {server.STYLE}")
-            self.assertTrue(puzzle["image"].startswith("data:image/png;base64,"))
-        del server.jobs[job_id]
+            self.assertEqual(prompt, f"{puzzle['subject']}, one subject centered, {generator.STYLE}")
+            self.assertTrue(valid(puzzle["art"]))
+            self.assertEqual(puzzle["art"]["title"], generator.title_for(", ".join(puzzle["words"]), 80))
 
     def test_starting_a_gauntlet_needs_an_account_and_the_picture_model(self):
         self.assertEqual(self.call("POST", "/api/gauntlet", {}, token="")[0], 401)
-        self.assertEqual(self.call("POST", "/api/gauntlet", {}, token=self.bob)[0], 503, "no picture model in tests")
-        with mock.patch.dict(server.model_state, status="ready"), mock.patch.object(server.waiting, "put") as queued:
-            status, body = self.call("POST", "/api/gauntlet", {}, token=self.bob)
+        with mock.patch.object(server, "GAUNTLET_READY", False):
+            self.assertEqual(self.call("POST", "/api/gauntlet", {}, token=self.bob)[0], 503, "no picture model in tests")
+            with mock.patch.dict(server.model_state, status="ready"), mock.patch.object(server.waiting, "put") as queued:
+                status, body = self.call("POST", "/api/gauntlet", {}, token=self.bob)
         self.assertEqual(status, 202)
         self.assertEqual(server.jobs[body["id"]]["kind"], "gauntlet")
         queued.assert_called_once_with(body["id"])
@@ -644,22 +699,11 @@ class GauntletTest(Harness):
 class ReadyGauntletTest(Harness):
     """Gauntlets made ahead: one per account, made a puzzle at a time, handed out once."""
 
-    class Painter:
-        def __init__(self, broken=False):
-            self.prompts, self.broken = [], broken
-
-        def generate_image(self, seed, prompt, **_):
-            from PIL import Image
-            if self.broken:
-                raise RuntimeError("out of memory")
-            self.prompts.append(prompt)
-            return type("Result", (), {"image": Image.new("RGB", (512, 512), (40, 120, 200))})()
-
     def setUp(self):
         super().setUp()
         with self.db.transaction() as conn:
             conn.execute("DELETE FROM gauntlets")
-        self.patches = [mock.patch.object(server, "USE_AGENT", False), mock.patch.object(server, "GAUNTLET_READY", True),
+        self.patches = [mock.patch.object(generator, "USE_AGENT", False), mock.patch.object(server, "GAUNTLET_READY", True),
                         mock.patch.object(server, "building", None), mock.patch.object(server, "refill_paused_until", 0.0)]
         for patch in self.patches:
             patch.start()
@@ -671,31 +715,33 @@ class ReadyGauntletTest(Harness):
 
     def fill(self, model):
         """Run the worker's idle steps until nothing is left to make."""
+        maker = generator.Generator(model)
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             for _ in range(500):
                 if server.building and server.building["writing"]:
                     server.building["writing"].result(timeout=10)  # let the artist finish
-                if not server.refill_step(model):
+                if not server.refill_step(maker):
                     return
         self.fail("never finished")
 
     def test_each_account_gets_one_ready_gauntlet_made_a_puzzle_at_a_time(self):
-        model, threads, go = self.Painter(), [], threading.Event()
-        real = server.subject_for
+        model, threads, go = FakeModel(), [], threading.Event()
+        real = generator.artist
 
         def artist(*args):  # a slow artist: waits until the test lets it answer
             threads.append(threading.current_thread().name)
             go.wait(10)
             return real(*args)
 
-        with mock.patch.object(server, "subject_for", artist):
-            self.assertTrue(server.refill_step(model))
+        maker = generator.Generator(model)
+        with mock.patch.object(generator, "artist", artist):
+            self.assertTrue(server.refill_step(maker))
             self.assertEqual(server.building["puzzles"], [], "the first step only starts the artist")
-            self.assertTrue(server.refill_step(model), "still writing: the worker returns at once")
+            self.assertTrue(server.refill_step(maker), "still writing: the worker returns at once")
             self.assertEqual(model.prompts, [], "nothing painted while the artist writes")
             go.set()
             server.building["writing"].result(timeout=10)
-            self.assertTrue(server.refill_step(model))
+            self.assertTrue(server.refill_step(maker))
             self.assertEqual(len(server.building["puzzles"]), 1, "then one picture per step, so a player never waits long")
             self.assertEqual(self.db.one("SELECT count(*) FROM gauntlets")[0], 0, "stored only once all five are made")
             self.fill(model)
@@ -706,26 +752,36 @@ class ReadyGauntletTest(Harness):
         for row in rows:
             puzzles = json.loads(row["puzzles"])
             self.assertEqual(len(puzzles), 5)
-            self.assertTrue(all(p["image"].startswith("data:image/png;base64,") and 3 <= len(p["words"]) <= 5 for p in puzzles))
-        self.assertFalse(server.refill_step(model), "nothing more to make")
+            self.assertTrue(all(valid(p["art"]) and "image" not in p for p in puzzles), "kept as puzzles, not pictures")
+            self.assertLess(len(row["puzzles"]), 40_000, "a few KB per puzzle")
+        self.assertFalse(server.refill_step(maker), "nothing more to make")
 
     def test_a_ready_gauntlet_is_handed_out_at_once_and_only_once(self):
-        self.fill(self.Painter())
-        stored = json.loads(self.db.one("SELECT puzzles FROM gauntlets WHERE account_id = ?", (accounts.account_id(self.db, "bob"),))[0])
+        self.fill(FakeModel())
+        bob = accounts.account_id(self.db, "bob")
+        stored = json.loads(self.db.one("SELECT puzzles FROM gauntlets WHERE account_id = ?", (bob,))[0])
         status, body = self.call("POST", "/api/gauntlet", {}, token=self.bob)
         self.assertEqual(status, 202)
         job = self.call("GET", f"/api/jobs/{body['id']}", token=self.bob)[1]
         self.assertEqual((job["status"], job["ready"], job["painted"], job["total"]), ("done", True, 5, 5))
         self.assertEqual(job["puzzles"], stored)
         self.assertEqual(self.call("GET", f"/api/jobs/{body['id']}", token=self.billy)[0], 404, "only for its account")
-        self.assertEqual(gauntlets.needing(self.db), [(accounts.account_id(self.db, "bob"), "bob")], "bob needs a new one")
+        self.assertEqual(gauntlets.needing(self.db), [(bob, "bob")], "bob needs a new one")
         self.assertEqual(self.call("POST", "/api/gauntlet", {}, token=self.bob)[0], 503, "none ready: made live, which needs the picture model")
-        model = self.Painter()
+        model = FakeModel()
         self.fill(model)
         self.assertEqual(len(model.prompts), 5, "the next one is made for bob")
 
+    def test_one_made_before_the_server_converted_puzzles_is_converted_when_taken(self):
+        picture = generator.picture_png(FakeModel().generate_image(1, "x").image)
+        old = [{"words": ["tiny", "cat", "in space"], "subject": "a tiny cat in space", "image": "data:image/png;base64," + __import__("base64").b64encode(picture).decode()}] * 5
+        gauntlets.store(self.db, accounts.account_id(self.db, "bob"), old)
+        body = self.call("POST", "/api/gauntlet", {}, token=self.bob)[1]
+        job = self.call("GET", f"/api/jobs/{body['id']}", token=self.bob)[1]
+        self.assertTrue(all(valid(p["art"]) and p["art"]["title"] == "Tiny, cat, in space" and "image" not in p for p in job["puzzles"]))
+
     def test_a_failed_puzzle_drops_the_partial_gauntlet_and_waits_before_trying_again(self):
-        broken = self.Painter(broken=True)
+        broken = generator.Generator(FakeModel(broken=True))
         with contextlib.redirect_stderr(io.StringIO()):
             for _ in range(20):
                 if server.building and server.building["writing"]:
@@ -734,13 +790,13 @@ class ReadyGauntletTest(Harness):
                 if server.refill_paused_until:
                     break
         self.assertIsNone(server.building)
-        self.assertFalse(server.refill_step(self.Painter()), "paused for a while")
+        self.assertFalse(server.refill_step(generator.Generator(FakeModel())), "paused for a while")
         self.assertEqual(self.db.one("SELECT count(*) FROM gauntlets")[0], 0)
 
     def test_switched_off_nothing_is_made_or_handed_out(self):
         with mock.patch.object(server, "GAUNTLET_READY", False):
-            self.assertFalse(server.refill_step(self.Painter()))
-            gauntlets.store(self.db, accounts.account_id(self.db, "bob"), [{"words": ["a"], "subject": "a", "image": "data:x"}])
+            self.assertFalse(server.refill_step(generator.Generator(FakeModel())))
+            gauntlets.store(self.db, accounts.account_id(self.db, "bob"), [{"words": ["a"], "subject": "a", "art": {}}])
             self.assertEqual(self.call("POST", "/api/gauntlet", {}, token=self.bob)[0], 503, "made live, not taken from the ready ones")
 
 

@@ -434,7 +434,8 @@ test('gauntlet: five word-soup puzzles go into Free play and play one after anot
   const jobs = { n: 0 }, events = [];
   const server = (method, path, body) => {
     if (path === '/api/gauntlet' && method === 'POST') { jobs.n++; return [202, { id: `g${jobs.n}` }]; }
-    if (path.startsWith('/api/jobs/')) return [200, { status: 'done', seconds: 9, total: 5, puzzles: soups.map(words => ({ words, subject: words.join(' '), image: 'data:x' })) }];
+    // The Mac sends finished puzzles; the first two come as pictures, as an older server sent them.
+    if (path.startsWith('/api/jobs/')) return [200, { status: 'done', seconds: 9, total: 5, puzzles: soups.map((words, n) => ({ words, subject: words.join(' '), ...(n < 2 ? { image: 'data:x' } : { art: { title: 'x', width: 2, height: 2, colors: ['#123456', '#abcdef'], pixels: [0, 1, 1, 0] } }) })) }];
     if (path === '/api/puzzles') return [201, { ok: true }];
     return fakeServer()(method, path, body);
   };
@@ -447,6 +448,7 @@ test('gauntlet: five word-soup puzzles go into Free play and play one after anot
   const saved = made(t);
   assert.deepEqual(saved.map(a => a.title).reverse(), ['Tiny, cat', 'Frozen, teapot, in space', 'Shy, owl, donut', 'Purple, robot, kite, moon', 'Golden, frog, crown'], 'titled with their words, all in Free play');
   assert.equal(t.elements.puzzleName.textContent, 'Gauntlet 1 of 5 · Tiny, cat');
+  assert.deepEqual(saved[0].pixels, [0, 1, 1, 0], 'finished puzzles from the Mac are used as they are');
   assert.deepEqual(events.find(([name]) => name === 'gauntlet_start')[1].soups, soups.map(w => w.join(' ')));
   // Finish the first: the pop-up offers the next one.
   const [first, second] = [...saved].reverse();

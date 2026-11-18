@@ -2,7 +2,7 @@
 // picks a random "word soup" for each (3 to 5 familiar words), the artist blends it into one
 // subject, Z-Image paints it, and the browser converts it like any made puzzle. The five go
 // into Free play, titled with their words, and the run is remembered so it can be continued.
-import { generateGauntlet, pictureToArt } from './generator.js';
+import { requestPuzzles, pictureToArt } from './generator.js';
 import { online, ServerError } from './account.js';
 import { gauntletRun, setGauntletRun } from './library.js';
 
@@ -32,14 +32,14 @@ export function createGauntlet(deps) {
     show(`<p class="eyebrow">GAUNTLET</p><h2>Five surprise puzzles</h2><p>Each one is painted from a random handful of words. Play them one after another.</p><p id="gauntletStatus" role="status">Picking words…</p>`, () => { run++; });
     const status = text => { if (mine === run) $('gauntletStatus').textContent = text; };
     try {
-      const job = await generateGauntlet(job => {
+      const job = await requestPuzzles('gauntlet', null, job => {
         if (job.status === 'queued') status(job.ahead ? `Waiting in line (${job.ahead} ahead)…` : 'Starting…');
         else status(`Painting puzzle ${Math.min(job.painted + 1, job.total)} of ${job.total}…`);
       });
       if (mine !== run) return;
       status('Cutting the jewels…');
       const base = Date.now().toString(36);
-      const made = await Promise.all(job.puzzles.map(async (p, n) => ({ ...(await pictureToArt(p.image, { title: titleOf(p.words) })), id: `custom-${base}${n}` })));
+      const made = await Promise.all(job.puzzles.map(async (p, n) => ({ ...(p.art || await pictureToArt(p.image, { title: titleOf(p.words) })), title: titleOf(p.words), id: `custom-${base}${n}` })));
       if (mine !== run) return;
       if (!made.every(deps.keep)) return status('This browser could not save the puzzles.');
       setGauntletRun({ ids: made.map(a => a.id), started });

@@ -3,11 +3,10 @@
 // picks one. The picked one is then played now, saved to Free play, or thrown away to
 // try the same idea again. Closing the pop-up at that point keeps it in Free play.
 //
-// The painter test (switched on at the server): two candidates come as today ("current":
-// the artist's rewrite, converted here), two are made on the Mac by painter v3 from the
-// player's words as typed ("painter"), already puzzle art. The server shuffles them; each
-// pick records its pipeline and its place on screen.
-import { generate, pictureToArt } from './generator.js';
+// The Mac sends finished puzzles, each marked with the pipeline that made it (variant). In
+// the painter test, two are "current" (the artist's rewrite, convert.js) and two "painter"
+// (the words as typed, painter v3), shuffled; each pick records its pipeline and its place.
+import { requestPuzzles, pictureToArt } from './generator.js';
 import { online, ServerError } from './account.js';
 
 // deps: { $, show(markup, then), esc, thumbnail, track,
@@ -42,13 +41,13 @@ export function createMaker(deps) {
     $('createGo').disabled = true; $('prompt').readOnly = true;
     status('Sending your idea…');
     try {
-      const job = await generate(idea, job => {
+      const job = await requestPuzzles('create', idea, job => {
         if (job.status === 'queued') status(job.ahead ? `Waiting in line (${job.ahead} ahead)…` : 'Starting…');
         else if (job.status === 'writing') status('Thinking about your idea…');
         else if (job.status === 'painting') status(`Painting “${job.subject}” — ${job.painted} of ${job.total}…`);
       });
       status('Cutting the jewels…');
-      const candidates = job.candidates || job.images.map(image => ({ variant: 'current', image }));
+      const candidates = job.candidates || job.images.map(image => ({ variant: 'current', image }));  // images: an older server
       const variants = candidates.map(c => c.variant);
       const choices = await Promise.all(candidates.map(c => c.art ? { ...c.art, title: title(idea) } : pictureToArt(c.image, { title: title(idea) })));
       deps.track('llm_generate', { ok: true, prompt: idea, subject: job.subject, agent: job.agent, images: candidates.length, seconds: job.seconds, ms: Date.now() - started });

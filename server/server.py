@@ -17,29 +17,27 @@ everything but signing in and the health check needs `Authorization: Bearer <tok
     PUT    /api/notifications {messages?, puzzles?, finished?}  -> all three (true or false)
     POST   /api/jobs      {prompt}                       -> 202 {id}
     POST   /api/gauntlet                                 -> 202 {id}: five word-soup puzzles (a ready one at once, if made ahead)
-    GET    /api/jobs/<id>                                -> status, then images (or, in the painter test, candidates)
+    GET    /api/jobs/<id>                                -> status, then candidates (create) or puzzles (gauntlet), as puzzle art
     GET    /api/health                                   -> {model: "ready" | "loading" | "error"}
 
 Texts about unread messages go out through textbot's notify service on this Mac
 (~/projects/textbot/notify.py), by account ID; textbot holds the phone numbers.
 
-Making a picture: one model call through orchestra's chat() turns an idea into one
-drawable subject (the prompt is agents/artist.md), Z-Image Turbo paints a few candidates,
-and the game converts the chosen picture into a puzzle in the browser.
+Making puzzles (generator.py): every puzzle comes from one pipeline of wording (the idea as
+typed, the artist's rewrite, or a word soup), a Z-Image picture, and a converter (convert.js,
+run here in Node, or painter v3). The server hands the game finished puzzle art.
 """
 
 import base64
-import io
 import json
 import os
 import queue
-import random
 import re
 import threading
 import time
 import traceback
 import uuid
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -55,7 +53,7 @@ load_dotenv((ROOT / os.environ.get("HARNESS_ENV", "../../harness/.env")).resolve
 import accounts  # noqa: E402  (after .env, so DB_FILE can come from it)
 import chat  # noqa: E402
 import gauntlets  # noqa: E402
-import painting  # noqa: E402
+import generator  # noqa: E402
 import saves  # noqa: E402
 import texts  # noqa: E402
 from db import Database  # noqa: E402
@@ -64,38 +62,16 @@ PORT = int(os.environ.get("PORT", "8787"))
 ORIGINS = {o.strip() for o in os.environ.get(
     "ALLOWED_ORIGINS", "https://momoswebsiteofthehour.com,http://localhost:4173,http://127.0.0.1:4173").split(",") if o.strip()}
 MODEL_PATH = os.environ.get("MODEL_PATH", "filipstrand/Z-Image-Turbo-mflux-4bit")
-USE_AGENT = os.environ.get("USE_AGENT", "1") != "0"
 USE_MODEL = os.environ.get("USE_MODEL", "1") != "0"  # 0: no picture model (for tests)
-ARTIST = ROOT / "agents" / "artist.md"
-# The reply is one short line; the rest of the budget is for the model's thinking.
-ARTIST_MAX_TOKENS = 2048
 
-CANDIDATES = 4
 MAX_WAITING = 5
 MAX_PROMPT = 200
 MAX_BODY = 16 * 1024
 MAX_SAVES_BODY = 2 * 1024 * 1024
 KEEP_JOBS = 30
-# Bold, flat, outlined icons on a plain background survive the trip down to 32x32.
-STYLE = ("flat vector icon style, bold simple shapes, thick dark outlines, at most 8 flat colors, "
-         "no gradients, no text, plain solid light background")
-# The painter test (PAINTER_TEST=1) compares two whole pipelines. "current": as today, the
-# artist rewrites the idea, Z-Image paints it, and the browser converts it (convert.js).
-# "painter": Z-Image paints the idea exactly as typed and painter v3 turns the full picture
-# into puzzle art here (painting.py). Two of each, shown in a random order; each job's
-# pictures, seeds, prompts, order and painter art are kept in data/painter-test/. Off: all
-# four are "current".
-PAINTER_TEST = os.environ.get("PAINTER_TEST", "0") == "1"
-PAINTER_DIR = Path(os.environ.get("PAINTER_DIR", ROOT / "painter")).expanduser()
-PAINTER_STYLE = "idylwild"
-PAINTER_COLORS = 10
-PAINTER_TEST_DIR = ROOT / "data" / "painter-test"
-# The gauntlet: five pictures from random "word soups" of familiar, drawable words
-# (words.json), each blended into one subject by the artist, painted, and played in a row.
-# In a trial, random dictionary words gave shapes unrelated to the words, and soups painted
-# as written lost most of their words; through the artist they became one fun subject.
-GAUNTLET_SIZE = 5
-WORDS = json.loads((ROOT / "words.json").read_text())
+# The gauntlet: five puzzles from random "word soups" of familiar, drawable words
+# (words.json), each blended into one subject by the artist (generator.py, "soup").
+GAUNTLET_SIZE = generator.GAUNTLET_SIZE
 # One gauntlet is kept ready for each account (gauntlets.py), made in the background one
 # puzzle at a time while nobody is waiting on a picture. GAUNTLET_READY=0 turns that off.
 GAUNTLET_READY = os.environ.get("GAUNTLET_READY", "1") != "0"
@@ -117,135 +93,9 @@ model_state = {"status": "loading" if USE_MODEL else "off", "error": None}
 failures: deque[float] = deque()
 
 
-def read_artist() -> tuple[dict, str]:
-    """agents/artist.md: `key: value` settings between '---' lines, then the system prompt."""
-    _, settings, prompt = ARTIST.read_text().split("---\n", 2)
-    pairs = (line.split(":", 1) for line in settings.splitlines() if ":" in line)
-    return {key.strip(): value.strip() for key, value in pairs}, prompt.strip()
-
-
-def subject_for(idea: str, job_id: str, account: str) -> tuple[str, bool]:
-    """Ask the artist for one drawable subject; fall back to the idea itself."""
-    if not USE_AGENT:
-        return idea, False
-    try:
-        from orchestra import chat as model_chat
-
-        settings, prompt = read_artist()
-        reply = model_chat(app="jewels", model=settings["model"],
-                           temperature=float(settings["temperature"]) if "temperature" in settings else None,
-                           max_tokens=ARTIST_MAX_TOKENS, metadata={"job": job_id, "account": account},
-                           messages=[{"role": "system", "content": prompt}, {"role": "user", "content": idea}])
-        if reply.finish_reason == "length":  # cut off: whatever came back isn't a finished subject
-            print(f"job {job_id}: the artist ran out of tokens; using the idea as written", flush=True)
-            return idea, False
-        answer = re.sub(r"<think>.*?</think>", "", reply.content or "", flags=re.S).strip()
-        line = next((l.strip(" \"'`*") for l in answer.splitlines() if l.strip()), "").rstrip(".")
-        if line:
-            return line[:160], True
-    except Exception:
-        traceback.print_exc()
-    return idea, False
-
-
-def picture_png(image) -> bytes:
-    # The converter works from a 128x128 grid, so 256px is plenty and keeps responses small.
-    from PIL import Image
-
-    image = image.convert("RGB").resize((256, 256), Image.LANCZOS)
-    buffer = io.BytesIO()
-    image.save(buffer, "PNG")
-    return buffer.getvalue()
-
-
-def data_url(png: bytes) -> str:
-    return "data:image/png;base64," + base64.b64encode(png).decode()
-
-
-def paint_plan(idea: str, subject: str) -> list[tuple[str, str]]:
-    """(variant, prompt) for each picture to paint."""
-    current = ("current", f"{subject}, one subject centered, {STYLE}")
-    if not PAINTER_TEST:
-        return [current] * CANDIDATES
-    painter = ("painter", f"{idea}, one subject centered, {STYLE}")
-    return [current] * (CANDIDATES // 2) + [painter] * (CANDIDATES - CANDIDATES // 2)
-
-
-def title_for(idea: str) -> str:
-    return idea[:1].upper() + idea[1:60]  # as create.js titles a new puzzle
-
-
-def candidate(variant: str, picture, idea: str) -> dict:
-    """What the browser gets for one picture: a picture to convert itself, or (painter) ready art.
-    If the painter can't make a puzzle of it, the picture goes to the browser after all,
-    marked so the pick isn't counted as either pipeline's."""
-    if variant == "painter":
-        try:
-            art = painting.painted_puzzle(picture, title_for(idea), PAINTER_DIR, PAINTER_STYLE, PAINTER_COLORS)
-            if art:
-                return {"variant": "painter", "art": art}
-        except Exception:
-            traceback.print_exc()
-        variant = "painter-failed"
-    return {"variant": variant, "image": data_url(picture_png(picture))}
-
-
-def test_candidates(job_id: str, job: dict, subject: str, painted: list[dict]) -> list[dict]:
-    """The painter test's four candidates, shuffled so no pipeline always shows first; the job
-    is kept with the order it was shown in."""
-    painted = random.sample(painted, len(painted))
-    shown = [{**item, "position": position, **candidate(item["variant"], item["picture"], job["prompt"])}
-             for position, item in enumerate(painted, 1)]
-    try:
-        save_test_job(job_id, job, subject, [{k: v for k, v in item.items() if k != "image"} for item in shown])
-    except OSError:
-        traceback.print_exc()  # keeping a copy must never cost the player their pictures
-    return [{k: item[k] for k in ("variant", "image", "art") if k in item} for item in shown]
-
-
-def save_test_job(job_id: str, job: dict, subject: str, shown: list[dict]) -> None:
-    """Keep a painter-test job: each full picture, and what made it and how it was shown."""
-    folder = PAINTER_TEST_DIR / job_id
-    folder.mkdir(parents=True, exist_ok=True)
-    for item in shown:
-        item["picture"].save(folder / item["file"])
-    (folder / "job.json").write_text(json.dumps({
-        "idea": job["prompt"], "subject": subject, "account": job["account"], "at": int(time.time()),
-        "style": PAINTER_STYLE, "most_colors": PAINTER_COLORS,
-        "shown": [{k: v for k, v in item.items() if k != "picture"} for item in shown],
-    }, indent=1))
-
-
-def soup(rng=random) -> list[str]:
-    """3 to 5 different words: one describer, one creature or thing, then any mix, shuffled."""
-    words = [rng.choice(WORDS["describers"]), rng.choice(WORDS["creatures"] + WORDS["things"])]
-    groups = [WORDS["describers"], WORDS["creatures"], WORDS["things"], WORDS["doings"]]
-    size = rng.choice([3, 4, 5])
-    while len(words) < size:
-        word = rng.choice(rng.choice(groups))
-        if word not in words:
-            words.append(word)
-    rng.shuffle(words)
-    return words
-
-
 def update(job_id: str, **fields) -> None:
     with lock:
         jobs[job_id].update(fields)
-
-
-def start_painter_test() -> None:
-    """Load painter v3 on the worker thread (MLX runs there). If it won't load, Create puzzle
-    carries on without the test."""
-    global PAINTER_TEST
-    if not PAINTER_TEST:
-        return
-    try:
-        painting.load(PAINTER_DIR)
-        print(f"painter test: on (2 current + 2 painter v3, {PAINTER_STYLE}, up to {PAINTER_COLORS} colors)", flush=True)
-    except Exception as error:
-        PAINTER_TEST = False
-        print(f"painter test: off, painter v3 didn't load from {PAINTER_DIR}: {error}", flush=True)
 
 
 def worker() -> None:
@@ -255,9 +105,10 @@ def worker() -> None:
         from mflux.models.z_image import ZImage
 
         model = ZImage(model_config=ModelConfig.z_image_turbo(), model_path=MODEL_PATH)
+        maker = generator.Generator(model)
         model_state["status"] = "ready"
         print(f"model ready: {MODEL_PATH}", flush=True)
-        start_painter_test()
+        generator.start_painter_test()
     except Exception as error:
         traceback.print_exc()
         model_state.update(status="error", error=str(error))
@@ -266,73 +117,61 @@ def worker() -> None:
         try:  # a player's request first; otherwise, every few seconds, a step of the next ready gauntlet
             job_id = waiting.get(timeout=0.5 if building else 5)
         except queue.Empty:
-            refill_step(model)
+            refill_step(maker)
             continue
         try:
-            (run_gauntlet if jobs[job_id].get("kind") == "gauntlet" else run_create)(job_id, model)
+            (run_gauntlet if jobs[job_id].get("kind") == "gauntlet" else run_create)(job_id, maker)
         except Exception as error:
             traceback.print_exc()
             update(job_id, status="error", error=str(error)[:200])
 
 
-def run_create(job_id: str, model) -> None:
-    """Create puzzle: the artist's subject (and in the painter test, the words as typed), four pictures."""
-    started = time.time()
+def run_create(job_id: str, maker) -> None:
+    """Create puzzle: four candidates, from the pipelines create_plan picks (all "current", or
+    in the painter test two of each, shuffled). Each pipeline's wording is done once."""
+    started, job = time.time(), jobs[job_id]
+    plan = generator.create_plan()
     update(job_id, status="writing")
-    subject, from_agent = subject_for(jobs[job_id]["prompt"], job_id, jobs[job_id]["account"])
-    plan = paint_plan(jobs[job_id]["prompt"], subject)
-    update(job_id, status="painting", subject=subject, agent=from_agent)
-    painted = []
-    for n, (variant, prompt) in enumerate(plan):
-        seed = random.randrange(2**31)
-        image = model.generate_image(seed=seed, prompt=prompt, num_inference_steps=8, width=512, height=512).image
-        painted.append({"picture": image, "file": f"{n}-{variant}.png", "variant": variant, "prompt": prompt, "seed": seed})
+    wordings = {name: generator.wording(name, job["prompt"], job["account"], job_id) for name in dict.fromkeys(plan)}
+    current = wordings.get("current") or next(iter(wordings.values()))
+    update(job_id, status="painting", subject=current["subject"], agent=current["agent"])
+    made = []
+    for n, name in enumerate(plan):
+        made.append(maker.make(name, wordings[name]))
         update(job_id, painted=n + 1)
-    if not PAINTER_TEST:
-        update(job_id, status="done", images=[data_url(picture_png(p["picture"])) for p in painted],
-               seconds=round(time.time() - started, 1))
-    else:
-        update(job_id, status="done", seconds=round(time.time() - started, 1),
-               candidates=test_candidates(job_id, jobs[job_id], subject, painted))
-    print(f"job {job_id} ({jobs[job_id]['account']}): {subject!r} in {time.time() - started:.1f}s (agent={from_agent})", flush=True)
+    if generator.PAINTER_TEST:
+        try:
+            generator.save_test_job(job_id, job, current["subject"], made)
+        except OSError:
+            traceback.print_exc()  # keeping a copy must never cost the player their puzzles
+    update(job_id, status="done", seconds=round(time.time() - started, 1), candidates=[generator.shown(m) for m in made])
+    print(f"job {job_id} ({job['account']}): {current['subject']!r} in {time.time() - started:.1f}s "
+          f"({','.join(m['variant'] for m in made)})", flush=True)
 
 
-def soup_subject(account: str, tag: str) -> tuple[list[str], str]:
-    """A word soup and the artist's one subject for it."""
-    words = soup()
-    return words, subject_for(" ".join(words), tag, account)[0]
+def gauntlet_puzzle(item: dict) -> dict:
+    """What a gauntlet keeps of a candidate: its words, subject and puzzle."""
+    return {"words": item["words"], "subject": item["subject"], "art": item["art"]}
 
 
-def paint_soup(model, words: list[str], subject: str) -> dict:
-    image = model.generate_image(seed=random.randrange(2**31), prompt=f"{subject}, one subject centered, {STYLE}",
-                                 num_inference_steps=8, width=512, height=512).image
-    return {"words": words, "subject": subject, "image": data_url(picture_png(image))}
-
-
-def gauntlet_puzzle(model, account: str, tag: str, on_written=None) -> dict:
-    """One word-soup puzzle: the soup, the artist's subject for it, and its painted picture."""
-    words, subject = soup_subject(account, tag)
-    if on_written:
-        on_written(subject)
-    return paint_soup(model, words, subject)
-
-
-def run_gauntlet(job_id: str, model) -> None:
-    """Five word soups, each turned into one subject by the artist and painted once."""
-    started, puzzles = time.time(), []
+def run_gauntlet(job_id: str, maker) -> None:
+    """Five word-soup puzzles, made one after another while the player waits."""
+    started, puzzles, account = time.time(), [], jobs[job_id]["account"]
     for n in range(GAUNTLET_SIZE):
         update(job_id, status="writing", painted=n)
-        puzzles.append(gauntlet_puzzle(model, jobs[job_id]["account"], job_id,
-                                       lambda subject: update(job_id, status="painting", subject=subject)))
+        words = generator.wording("soup", "", account, job_id)
+        update(job_id, status="painting", subject=words["subject"])
+        puzzles.append(gauntlet_puzzle(maker.make("soup", words)))
         update(job_id, painted=n + 1)
     update(job_id, status="done", puzzles=puzzles, seconds=round(time.time() - started, 1))
-    print(f"gauntlet {job_id} ({jobs[job_id]['account']}): {[p['subject'] for p in puzzles]} in {time.time() - started:.1f}s", flush=True)
+    print(f"gauntlet {job_id} ({account}): {[p['subject'] for p in puzzles]} in {time.time() - started:.1f}s", flush=True)
 
 
-def refill_step(model) -> bool:
+def refill_step(maker) -> bool:
     """One step of the next account's ready gauntlet: start the artist on a soup in the
-    background, or paint a soup the artist has finished (a couple of seconds on this thread).
-    Stores the gauntlet once all five are painted. Returns whether there was anything to do."""
+    background, or paint and convert a soup the artist has finished (a couple of seconds on
+    this thread). Stores the gauntlet once all five are made. Returns whether there was
+    anything to do."""
     global building, refill_paused_until
     if not GAUNTLET_READY or db is None or time.time() < refill_paused_until:
         return False
@@ -343,38 +182,41 @@ def refill_step(model) -> bool:
                 return False
             building = {"account_id": need[0][0], "name": need[0][1], "puzzles": [], "started": time.time(), "writing": None}
         if building["writing"] is None:
-            building["writing"] = writer.submit(soup_subject, building["name"], f"ready-{building['account_id']}")
+            building["writing"] = writer.submit(generator.wording, "soup", "", building["name"], f"ready-{building['account_id']}")
         if not building["writing"].done():
             return True  # the artist is still writing; the worker stays free for players
-        words, subject = building["writing"].result()
+        words = building["writing"].result()
         building["writing"] = None
-        building["puzzles"].append(paint_soup(model, words, subject))
+        building["puzzles"].append(gauntlet_puzzle(maker.make("soup", words)))
         if len(building["puzzles"]) == GAUNTLET_SIZE:
             gauntlets.store(db, building["account_id"], building["puzzles"])
             print(f"gauntlet ready for {building['name']} in {time.time() - building['started']:.0f}s", flush=True)
             building = None
         else:
-            building["writing"] = writer.submit(soup_subject, building["name"], f"ready-{building['account_id']}")
+            building["writing"] = writer.submit(generator.wording, "soup", "", building["name"], f"ready-{building['account_id']}")
     except Exception:
         traceback.print_exc()
         building, refill_paused_until = None, time.time() + REFILL_AFTER_ERROR
     return True
 
 
+def ready_puzzles(puzzles: list[dict]) -> list[dict]:
+    """A ready gauntlet as the game gets it. Ones made before the server converted puzzles
+    itself hold pictures; those are converted now."""
+    return [p if "art" in p else {"words": p["words"], "subject": p["subject"], "art": generator.converter.convert(
+                base64.b64decode(p["image"].split(",", 1)[1]), generator.title_for(", ".join(p["words"]), 80))}
+            for p in puzzles]
+
+
 def public_view(job: dict) -> dict:
     view = {k: job.get(k) for k in ("id", "status", "subject", "agent", "painted", "error", "seconds", "ready")}
-    view["total"] = GAUNTLET_SIZE if job.get("kind") == "gauntlet" else CANDIDATES
+    view["total"] = GAUNTLET_SIZE if job.get("kind") == "gauntlet" else generator.CANDIDATES
     if job["status"] == "queued":
         with lock:
             ahead = [j for j in jobs.values() if j["status"] in ("queued", "writing", "painting") and j["created"] < job["created"]]
         view["ahead"] = len(ahead)
     if job["status"] == "done":
-        if "puzzles" in job:
-            view["puzzles"] = job["puzzles"]
-        elif "candidates" in job:
-            view["candidates"] = job["candidates"]
-        else:
-            view["images"] = job["images"]
+        view["puzzles" if "puzzles" in job else "candidates"] = job.get("puzzles") or job.get("candidates")
     return view
 
 
@@ -441,7 +283,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path, query = self.route()
         if path == "/api/health":
-            return self.send(200, {"model": model_state["status"], "agent": USE_AGENT})
+            return self.send(200, {"model": model_state["status"], "agent": generator.USE_AGENT})
         match = re.fullmatch(r"/api/jobs/([0-9a-f]{32})", path)
         if path not in ("/api/me", "/api/saves", "/api/messages", "/api/notifications") and not match:
             return self.send(404, {"error": "Not found."})
@@ -488,6 +330,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/gauntlet":
             ready = gauntlets.take(db, me["id"]) if GAUNTLET_READY else None
             if ready:  # made ahead: a request that is already done (the worker then makes the next)
+                ready = ready_puzzles(ready)
                 job_id = uuid.uuid4().hex
                 with lock:
                     jobs[job_id] = {"id": job_id, "kind": "gauntlet", "prompt": "gauntlet", "account": me["name"], "status": "done",
@@ -591,11 +434,11 @@ def main() -> None:
     if texts.token():
         threading.Thread(target=notice_loop, daemon=True).start()
     print(f"texts about unread messages: {'on' if texts.token() else 'off (no TEXTBOT_NOTIFY_TOKEN)'}", flush=True)
-    if not PAINTER_TEST:
+    if not generator.PAINTER_TEST:
         print("painter test: off", flush=True)
     print(f"ready gauntlets: {'on, one per account' if GAUNTLET_READY else 'off'}", flush=True)
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    print(f"Pixel Game server on http://127.0.0.1:{PORT} (agent={'on' if USE_AGENT else 'off'}, data={db.path})", flush=True)
+    print(f"Pixel Game server on http://127.0.0.1:{PORT} (agent={'on' if generator.USE_AGENT else 'off'}, data={db.path})", flush=True)
     server.serve_forever()
 
 
