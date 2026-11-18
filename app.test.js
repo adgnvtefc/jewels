@@ -402,6 +402,33 @@ async function createFromHome(t, idea = 'a red ball') {
 }
 const made = t => JSON.parse(t.store['little-jewel:bob:custom-puzzles'] || '[]');
 
+test('a puzzle made from the chat can go straight to the chat; one made from the start screen cannot', async () => {
+  const events = [], t = await mount({ stored: signedIn, server: painter(), catseye: (name, data) => events.push([name, data]) });
+  await tick();
+  await createFromHome(t);
+  t.elements.candidates.children[0].onclick();
+  assert.doesNotMatch(t.elements.modalContent.markup, /Send to chat/, 'no Send to chat from the start screen');
+  t.elements.keepMade.onclick();
+  t.elements.chatButton.onclick();
+  t.elements.chatPuzzle.onclick();
+  delete t.elements.candidates;
+  t.elements.pickCreate.onclick();
+  t.elements.prompt.value = 'a green frog';
+  t.elements.createForm.onsubmit({ preventDefault() {} });
+  for (let i = 0; i < 300 && !t.elements.candidates?.children.length; i++) await tick(10);
+  t.elements.candidates.children[1].onclick();
+  assert.match(t.elements.modalContent.markup, /<button class="primary" id="sendMade">Send to chat<\/button><button class="home-button" id="playMade">/, 'Send to chat first, from the chat');
+  t.elements.sendMade.onclick();
+  assert.equal(t.elements.modal.open, false, 'back to the chat');
+  for (let i = 0; i < 100 && !t.calls.some(c => c.method === 'POST' && c.path === '/api/messages'); i++) await tick(10);
+  const upload = t.calls.find(c => c.path === '/api/puzzles' && c.body.art.title === 'A green frog');
+  const message = t.calls.find(c => c.method === 'POST' && c.path === '/api/messages');
+  assert.ok(upload, 'the puzzle reaches the server first');
+  assert.equal(message.body.puzzle, upload.body.art.id, 'then the chat message with that puzzle');
+  assert.ok(made(t).some(a => a.id === upload.body.art.id), 'and it stays in Free play');
+  assert.equal(events.filter(([name]) => name === 'made_puzzle').at(-1)[1].choice, 'send');
+});
+
 test('a guest who taps Create puzzle on the start screen is asked to sign in first', async () => {
   const t = await mount();
   t.elements.createHome.onclick();

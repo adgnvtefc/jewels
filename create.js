@@ -12,12 +12,16 @@ import { online, ServerError } from './account.js';
 
 // deps: { $, show(markup, then), esc, thumbnail, track,
 //         keep(puzzle) → saved?, play(puzzle), freePlay(), signIn(note, then) }
+// start({ send }): from the chat, `send(puzzle)` sends a puzzle there, and the finished
+// pop-up offers Send to chat first.
 export function createMaker(deps) {
   const { $, show, esc } = deps;
   let run = 0;  // the latest request; an older one, or one whose pop-up closed, is dropped
+  let send = null;  // set when started from the chat
   const title = idea => idea[0].toUpperCase() + idea.slice(1, 60);
 
-  function start() {
+  function start(options) {
+    send = typeof options?.send === 'function' ? options.send : null;  // a click event is not options
     if (online()) ask();
     else deps.signIn('Creating puzzles needs an account.', ask);
   }
@@ -80,8 +84,11 @@ export function createMaker(deps) {
   function made(idea, puzzle, variant) {
     let decided = false;
     const keep = () => { decided = true; if (deps.keep(puzzle)) return true; $('madeNote').textContent = 'This browser could not save the puzzle.'; decided = false; return false; };
-    show(`<p class="eyebrow">YOUR NEW PUZZLE</p><h2>${esc(puzzle.title)}</h2><img src="${deps.thumbnail(puzzle, 8)}" alt="Your new puzzle"><button class="primary" id="playMade">Play now</button><button class="home-button" id="keepMade">Save to Free play</button><button class="home-button" id="againMade">Try again</button><p id="madeNote" role="status"></p>`,
+    const sendButton = send ? '<button class="primary" id="sendMade">Send to chat</button>' : '';
+    show(`<p class="eyebrow">YOUR NEW PUZZLE</p><h2>${esc(puzzle.title)}</h2><img src="${deps.thumbnail(puzzle, 8)}" alt="Your new puzzle">${sendButton}<button class="${send ? 'home-button' : 'primary'}" id="playMade">Play now</button><button class="home-button" id="keepMade">Save to Free play</button><button class="home-button" id="againMade">Try again</button><p id="madeNote" role="status"></p>`,
       () => { if (!decided) deps.keep(puzzle); });
+    // Sending keeps it in Free play too, as every puzzle you send is one of yours.
+    if (send) $('sendMade').onclick = () => { if (keep()) { deps.track('made_puzzle', { choice: 'send', variant }); $('modal').close(); send(puzzle); } };
     $('playMade').onclick = () => { if (keep()) { deps.track('made_puzzle', { choice: 'play', variant }); $('modal').close(); deps.play(puzzle); } };
     $('keepMade').onclick = () => { if (keep()) { deps.track('made_puzzle', { choice: 'free_play', variant }); deps.freePlay(); } };
     $('againMade').onclick = () => { decided = true; deps.track('made_puzzle', { choice: 'again', variant }); again(idea); };

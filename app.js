@@ -697,8 +697,8 @@ $('chatPuzzle').onclick = () => {
   const mine = customPuzzles().filter(a => !a.from);
   show(`<p class="eyebrow">SEND A PUZZLE</p><h2>Your puzzles</h2>${mine.length ? '<div class="puzzle-list" id="pickList"></div>' : '<p>Nothing here yet. Create one, then send it.</p>'}<button class="primary" id="pickCreate">✦ Create puzzle</button>`);
   for (const puzzle of mine) $('pickList').append(puzzleCard(puzzle, () => { $('modal').close(); sendPuzzle(puzzle); }));
-  // A puzzle made from here lands in this list; tap 🧩 again to send it.
-  $('pickCreate').onclick = maker.start;
+  // A puzzle made from here can go straight to the chat (Send to chat), or wait in this list.
+  $('pickCreate').onclick = () => maker.start({ send: puzzle => sendPuzzle(puzzle) });
 };
 const chat = createChat({
   $, thumbnail, progress,
