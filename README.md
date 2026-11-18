@@ -64,7 +64,12 @@ How it works:
 3. **Five puzzles.** The browser converts the five pictures as usual and saves them to Free play, titled with their words ("Frozen, teapot, in space"). The board's header says "Gauntlet 2 of 5". Finishing one offers **Next puzzle**; finishing the fifth shows all five and the total moves.
 4. **Continuing.** The run is remembered in the browser (per account). Leaving with ☰ Menu and tapping Gauntlet again offers **Continue** at the first unfinished puzzle, or **New gauntlet**.
 
-Why this recipe: in a trial, random dictionary words (`/usr/share/dict/words`) gave plain shapes that had nothing to do with the words, and a soup painted exactly as written kept only a word or two. Through the artist, the hand-picked words became one fun subject almost every time. Making a gauntlet takes about 80 seconds, almost all of it the artist (about 13 seconds per soup); the pop-up shows which puzzle is being painted.
+Why this recipe: in a trial, random dictionary words (`/usr/share/dict/words`) gave plain shapes that had nothing to do with the words, and a soup painted exactly as written kept only a word or two. Through the artist, the hand-picked words became one fun subject almost every time. Making a gauntlet takes about 80 seconds or more, almost all of it the artist (13 to 35 seconds per soup), so the server keeps **one ready for each account**:
+
+- **Made ahead, in the background.** While nobody is waiting on a picture, the server makes the next account's gauntlet: the artist writes each soup's subject on a thread of its own, and the picture worker paints it, which keeps the worker busy for under 2 seconds at a time. A player's Create puzzle or gauntlet always goes first. One took about 2 minutes to make this way.
+- **Handed out at once.** Tapping Gauntlet takes the account's ready one, so it starts in about a second, and the next one is started straight away. If none is ready yet, it's made while you wait, as before, and the pop-up shows which puzzle is being painted. `gauntlet_start` records whether it was ready (`ready`) and how long the player waited (`ms`).
+- **Kept in the database** (`gauntlets`, schema 4, `server/gauntlets.py`), so a restart keeps them; a taken one is deleted. A failed puzzle drops the half-made gauntlet and the server tries again 5 minutes later. `GAUNTLET_READY=0` in `server/.env` turns making them ahead off.
+- **The cost:** after each gauntlet someone takes, about 1 to 3 minutes of the local Qwen model (through orchestra) and 10 seconds of painting.
 
 ### The painter test
 

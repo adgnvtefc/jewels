@@ -112,6 +112,17 @@ UPGRADES: list[str] = [
       finished   INTEGER DEFAULT 0
     )
     """,
+    # 4: gauntlets made ahead, one ready per account (gauntlets.py). puzzles is JSON:
+    # [{words, subject, image}] with each picture as a 256 px PNG data URL. Deleted when taken.
+    """
+    CREATE TABLE gauntlets (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id INTEGER NOT NULL REFERENCES accounts(id),
+      puzzles    TEXT NOT NULL,
+      made_at    INTEGER NOT NULL
+    );
+    CREATE INDEX gauntlets_account ON gauntlets(account_id, id)
+    """,
 ]
 VERSION = 1 + len(UPGRADES)
 

@@ -16,7 +16,7 @@ everything but signing in and the health check needs `Authorization: Bearer <tok
     GET    /api/notifications                            -> {messages, puzzles, finished}: which kinds get texts
     PUT    /api/notifications {messages?, puzzles?, finished?}  -> all three (true or false)
     POST   /api/jobs      {prompt}                       -> 202 {id}
-    POST   /api/gauntlet                                 -> 202 {id}: a job that makes five word-soup puzzles
+    POST   /api/gauntlet                                 -> 202 {id}: five word-soup puzzles (a ready one at once, if made ahead)
     GET    /api/jobs/<id>                                -> status, then images (or, in the painter test, candidates)
     GET    /api/health                                   -> {model: "ready" | "loading" | "error"}
 
@@ -39,6 +39,7 @@ import threading
 import time
 import traceback
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -53,6 +54,7 @@ load_dotenv((ROOT / os.environ.get("HARNESS_ENV", "../../harness/.env")).resolve
 
 import accounts  # noqa: E402  (after .env, so DB_FILE can come from it)
 import chat  # noqa: E402
+import gauntlets  # noqa: E402
 import painting  # noqa: E402
 import saves  # noqa: E402
 import texts  # noqa: E402
@@ -94,6 +96,15 @@ PAINTER_TEST_DIR = ROOT / "data" / "painter-test"
 # as written lost most of their words; through the artist they became one fun subject.
 GAUNTLET_SIZE = 5
 WORDS = json.loads((ROOT / "words.json").read_text())
+# One gauntlet is kept ready for each account (gauntlets.py), made in the background one
+# puzzle at a time while nobody is waiting on a picture. GAUNTLET_READY=0 turns that off.
+GAUNTLET_READY = os.environ.get("GAUNTLET_READY", "1") != "0"
+REFILL_AFTER_ERROR = 300  # seconds to wait before trying again after a failed puzzle
+building: dict | None = None  # the gauntlet being made ahead (worker thread only)
+refill_paused_until = 0.0
+# The artist runs in the background (it doesn't use the picture model), so the picture worker
+# only ever spends a couple of seconds painting between players' requests.
+writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gauntlet-writer")
 
 # Texts about unread chat messages (chat.due_notices has the rule; texts.py sends them).
 NOTICE_CHECK_SECONDS = 60
@@ -252,7 +263,11 @@ def worker() -> None:
         model_state.update(status="error", error=str(error))
         return
     while True:
-        job_id = waiting.get()
+        try:  # a player's request first; otherwise, every few seconds, a step of the next ready gauntlet
+            job_id = waiting.get(timeout=0.5 if building else 5)
+        except queue.Empty:
+            refill_step(model)
+            continue
         try:
             (run_gauntlet if jobs[job_id].get("kind") == "gauntlet" else run_create)(job_id, model)
         except Exception as error:
@@ -282,24 +297,72 @@ def run_create(job_id: str, model) -> None:
     print(f"job {job_id} ({jobs[job_id]['account']}): {subject!r} in {time.time() - started:.1f}s (agent={from_agent})", flush=True)
 
 
+def soup_subject(account: str, tag: str) -> tuple[list[str], str]:
+    """A word soup and the artist's one subject for it."""
+    words = soup()
+    return words, subject_for(" ".join(words), tag, account)[0]
+
+
+def paint_soup(model, words: list[str], subject: str) -> dict:
+    image = model.generate_image(seed=random.randrange(2**31), prompt=f"{subject}, one subject centered, {STYLE}",
+                                 num_inference_steps=8, width=512, height=512).image
+    return {"words": words, "subject": subject, "image": data_url(picture_png(image))}
+
+
+def gauntlet_puzzle(model, account: str, tag: str, on_written=None) -> dict:
+    """One word-soup puzzle: the soup, the artist's subject for it, and its painted picture."""
+    words, subject = soup_subject(account, tag)
+    if on_written:
+        on_written(subject)
+    return paint_soup(model, words, subject)
+
+
 def run_gauntlet(job_id: str, model) -> None:
     """Five word soups, each turned into one subject by the artist and painted once."""
     started, puzzles = time.time(), []
     for n in range(GAUNTLET_SIZE):
-        words = soup()
         update(job_id, status="writing", painted=n)
-        subject, _ = subject_for(" ".join(words), job_id, jobs[job_id]["account"])
-        update(job_id, status="painting", subject=subject)
-        image = model.generate_image(seed=random.randrange(2**31), prompt=f"{subject}, one subject centered, {STYLE}",
-                                     num_inference_steps=8, width=512, height=512).image
-        puzzles.append({"words": words, "subject": subject, "image": data_url(picture_png(image))})
+        puzzles.append(gauntlet_puzzle(model, jobs[job_id]["account"], job_id,
+                                       lambda subject: update(job_id, status="painting", subject=subject)))
         update(job_id, painted=n + 1)
     update(job_id, status="done", puzzles=puzzles, seconds=round(time.time() - started, 1))
     print(f"gauntlet {job_id} ({jobs[job_id]['account']}): {[p['subject'] for p in puzzles]} in {time.time() - started:.1f}s", flush=True)
 
 
+def refill_step(model) -> bool:
+    """One step of the next account's ready gauntlet: start the artist on a soup in the
+    background, or paint a soup the artist has finished (a couple of seconds on this thread).
+    Stores the gauntlet once all five are painted. Returns whether there was anything to do."""
+    global building, refill_paused_until
+    if not GAUNTLET_READY or db is None or time.time() < refill_paused_until:
+        return False
+    try:
+        if building is None:
+            need = gauntlets.needing(db)
+            if not need:
+                return False
+            building = {"account_id": need[0][0], "name": need[0][1], "puzzles": [], "started": time.time(), "writing": None}
+        if building["writing"] is None:
+            building["writing"] = writer.submit(soup_subject, building["name"], f"ready-{building['account_id']}")
+        if not building["writing"].done():
+            return True  # the artist is still writing; the worker stays free for players
+        words, subject = building["writing"].result()
+        building["writing"] = None
+        building["puzzles"].append(paint_soup(model, words, subject))
+        if len(building["puzzles"]) == GAUNTLET_SIZE:
+            gauntlets.store(db, building["account_id"], building["puzzles"])
+            print(f"gauntlet ready for {building['name']} in {time.time() - building['started']:.0f}s", flush=True)
+            building = None
+        else:
+            building["writing"] = writer.submit(soup_subject, building["name"], f"ready-{building['account_id']}")
+    except Exception:
+        traceback.print_exc()
+        building, refill_paused_until = None, time.time() + REFILL_AFTER_ERROR
+    return True
+
+
 def public_view(job: dict) -> dict:
-    view = {k: job.get(k) for k in ("id", "status", "subject", "agent", "painted", "error", "seconds")}
+    view = {k: job.get(k) for k in ("id", "status", "subject", "agent", "painted", "error", "seconds", "ready")}
     view["total"] = GAUNTLET_SIZE if job.get("kind") == "gauntlet" else CANDIDATES
     if job["status"] == "queued":
         with lock:
@@ -423,6 +486,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/messages/read":
             return self.send(*chat.mark_read(db, me["id"], data))
         if path == "/api/gauntlet":
+            ready = gauntlets.take(db, me["id"]) if GAUNTLET_READY else None
+            if ready:  # made ahead: a request that is already done (the worker then makes the next)
+                job_id = uuid.uuid4().hex
+                with lock:
+                    jobs[job_id] = {"id": job_id, "kind": "gauntlet", "prompt": "gauntlet", "account": me["name"], "status": "done",
+                                    "painted": GAUNTLET_SIZE, "puzzles": ready, "seconds": 0, "ready": True, "created": time.time()}
+                return self.send(202, {"id": job_id})
             return self.start_job({"prompt": "gauntlet"}, me, kind="gauntlet")
         self.start_job(data, me)
 
@@ -523,6 +593,7 @@ def main() -> None:
     print(f"texts about unread messages: {'on' if texts.token() else 'off (no TEXTBOT_NOTIFY_TOKEN)'}", flush=True)
     if not PAINTER_TEST:
         print("painter test: off", flush=True)
+    print(f"ready gauntlets: {'on, one per account' if GAUNTLET_READY else 'off'}", flush=True)
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"Pixel Game server on http://127.0.0.1:{PORT} (agent={'on' if USE_AGENT else 'off'}, data={db.path})", flush=True)
     server.serve_forever()

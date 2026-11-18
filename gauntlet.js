@@ -43,7 +43,7 @@ export function createGauntlet(deps) {
       if (mine !== run) return;
       if (!made.every(deps.keep)) return status('This browser could not save the puzzles.');
       setGauntletRun({ ids: made.map(a => a.id), started });
-      deps.track('gauntlet_start', { soups: job.puzzles.map(p => p.words.join(' ')), subjects: job.puzzles.map(p => p.subject), seconds: job.seconds });
+      deps.track('gauntlet_start', { soups: job.puzzles.map(p => p.words.join(' ')), subjects: job.puzzles.map(p => p.subject), seconds: job.seconds, ready: job.ready === true, ms: Date.now() - started });
       run++; $('modal').close(); deps.play(made[0]);
     } catch (error) {
       deps.track('gauntlet_start', { ok: false, error: error.message, status: error.status });

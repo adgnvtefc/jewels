@@ -25,6 +25,7 @@ os.environ.update(DB_FILE=str(Path(TEMP.name) / "test.db"), USE_MODEL="0", USE_A
 
 import accounts  # noqa: E402
 import chat  # noqa: E402
+import gauntlets  # noqa: E402
 import saves  # noqa: E402
 import server  # noqa: E402
 import texts  # noqa: E402
@@ -638,6 +639,109 @@ class GauntletTest(Harness):
         self.assertEqual(server.jobs[body["id"]]["kind"], "gauntlet")
         queued.assert_called_once_with(body["id"])
         del server.jobs[body["id"]]
+
+
+class ReadyGauntletTest(Harness):
+    """Gauntlets made ahead: one per account, made a puzzle at a time, handed out once."""
+
+    class Painter:
+        def __init__(self, broken=False):
+            self.prompts, self.broken = [], broken
+
+        def generate_image(self, seed, prompt, **_):
+            from PIL import Image
+            if self.broken:
+                raise RuntimeError("out of memory")
+            self.prompts.append(prompt)
+            return type("Result", (), {"image": Image.new("RGB", (512, 512), (40, 120, 200))})()
+
+    def setUp(self):
+        super().setUp()
+        with self.db.transaction() as conn:
+            conn.execute("DELETE FROM gauntlets")
+        self.patches = [mock.patch.object(server, "USE_AGENT", False), mock.patch.object(server, "GAUNTLET_READY", True),
+                        mock.patch.object(server, "building", None), mock.patch.object(server, "refill_paused_until", 0.0)]
+        for patch in self.patches:
+            patch.start()
+        self.accounts = [row["id"] for row in self.db.read("SELECT id FROM accounts ORDER BY id")]
+
+    def tearDown(self):
+        for patch in self.patches:
+            patch.stop()
+
+    def fill(self, model):
+        """Run the worker's idle steps until nothing is left to make."""
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            for _ in range(500):
+                if server.building and server.building["writing"]:
+                    server.building["writing"].result(timeout=10)  # let the artist finish
+                if not server.refill_step(model):
+                    return
+        self.fail("never finished")
+
+    def test_each_account_gets_one_ready_gauntlet_made_a_puzzle_at_a_time(self):
+        model, threads, go = self.Painter(), [], threading.Event()
+        real = server.subject_for
+
+        def artist(*args):  # a slow artist: waits until the test lets it answer
+            threads.append(threading.current_thread().name)
+            go.wait(10)
+            return real(*args)
+
+        with mock.patch.object(server, "subject_for", artist):
+            self.assertTrue(server.refill_step(model))
+            self.assertEqual(server.building["puzzles"], [], "the first step only starts the artist")
+            self.assertTrue(server.refill_step(model), "still writing: the worker returns at once")
+            self.assertEqual(model.prompts, [], "nothing painted while the artist writes")
+            go.set()
+            server.building["writing"].result(timeout=10)
+            self.assertTrue(server.refill_step(model))
+            self.assertEqual(len(server.building["puzzles"]), 1, "then one picture per step, so a player never waits long")
+            self.assertEqual(self.db.one("SELECT count(*) FROM gauntlets")[0], 0, "stored only once all five are made")
+            self.fill(model)
+        self.assertEqual(len(model.prompts), 5 * len(self.accounts))
+        self.assertTrue(threads and all(name.startswith("gauntlet-writer") for name in threads), "the artist never runs on the picture worker")
+        rows = self.db.read("SELECT account_id, puzzles FROM gauntlets ORDER BY account_id")
+        self.assertEqual([r["account_id"] for r in rows], self.accounts, "exactly one each")
+        for row in rows:
+            puzzles = json.loads(row["puzzles"])
+            self.assertEqual(len(puzzles), 5)
+            self.assertTrue(all(p["image"].startswith("data:image/png;base64,") and 3 <= len(p["words"]) <= 5 for p in puzzles))
+        self.assertFalse(server.refill_step(model), "nothing more to make")
+
+    def test_a_ready_gauntlet_is_handed_out_at_once_and_only_once(self):
+        self.fill(self.Painter())
+        stored = json.loads(self.db.one("SELECT puzzles FROM gauntlets WHERE account_id = ?", (accounts.account_id(self.db, "bob"),))[0])
+        status, body = self.call("POST", "/api/gauntlet", {}, token=self.bob)
+        self.assertEqual(status, 202)
+        job = self.call("GET", f"/api/jobs/{body['id']}", token=self.bob)[1]
+        self.assertEqual((job["status"], job["ready"], job["painted"], job["total"]), ("done", True, 5, 5))
+        self.assertEqual(job["puzzles"], stored)
+        self.assertEqual(self.call("GET", f"/api/jobs/{body['id']}", token=self.billy)[0], 404, "only for its account")
+        self.assertEqual(gauntlets.needing(self.db), [(accounts.account_id(self.db, "bob"), "bob")], "bob needs a new one")
+        self.assertEqual(self.call("POST", "/api/gauntlet", {}, token=self.bob)[0], 503, "none ready: made live, which needs the picture model")
+        model = self.Painter()
+        self.fill(model)
+        self.assertEqual(len(model.prompts), 5, "the next one is made for bob")
+
+    def test_a_failed_puzzle_drops_the_partial_gauntlet_and_waits_before_trying_again(self):
+        broken = self.Painter(broken=True)
+        with contextlib.redirect_stderr(io.StringIO()):
+            for _ in range(20):
+                if server.building and server.building["writing"]:
+                    server.building["writing"].result(timeout=10)
+                server.refill_step(broken)
+                if server.refill_paused_until:
+                    break
+        self.assertIsNone(server.building)
+        self.assertFalse(server.refill_step(self.Painter()), "paused for a while")
+        self.assertEqual(self.db.one("SELECT count(*) FROM gauntlets")[0], 0)
+
+    def test_switched_off_nothing_is_made_or_handed_out(self):
+        with mock.patch.object(server, "GAUNTLET_READY", False):
+            self.assertFalse(server.refill_step(self.Painter()))
+            gauntlets.store(self.db, accounts.account_id(self.db, "bob"), [{"words": ["a"], "subject": "a", "image": "data:x"}])
+            self.assertEqual(self.call("POST", "/api/gauntlet", {}, token=self.bob)[0], 503, "made live, not taken from the ready ones")
 
 
 if __name__ == "__main__":
