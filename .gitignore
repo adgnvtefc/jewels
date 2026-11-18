@@ -5,3 +5,5 @@ server/.venv/
 __pycache__/
 server/logs/
 server/data/
+# Painter v3's weights (58 MB): kept on the Mac, not in git. See server/painter/README.md.
+server/painter/*.safetensors

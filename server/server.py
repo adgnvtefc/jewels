@@ -86,7 +86,7 @@ STYLE = ("flat vector icon style, bold simple shapes, thick dark outlines, at mo
 # pictures, seeds, prompts, order and painter art are kept in data/painter-test/. Off: all
 # four are "current".
 PAINTER_TEST = os.environ.get("PAINTER_TEST", "0") == "1"
-PAINTER_DIR = Path(os.environ.get("PAINTER_DIR", "~/projects/better-pixels/models/painterv3")).expanduser()
+PAINTER_DIR = Path(os.environ.get("PAINTER_DIR", ROOT / "painter")).expanduser()
 PAINTER_STYLE = "idylwild"
 PAINTER_COLORS = 10
 PAINTER_TEST_DIR = ROOT / "data" / "painter-test"

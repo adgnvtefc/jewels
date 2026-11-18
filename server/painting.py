@@ -1,9 +1,8 @@
 """Painter v3: turns a painted picture into puzzle art on the Mac, for the Create puzzle test.
 
-The model lives in better-pixels' saved copy (`models/painterv3`, set by PAINTER_DIR); it is
-loaded from there by file path, so nothing else in that project is imported. Its output is
-calmed into the game's range by the cleanup below, a copy of better-pixels' `puzzle.calm`
-(2026-11-14), kept here so later work in that project can't change live puzzles:
+The model is a copy of better-pixels' saved painter v3, in server/painter/ (PAINTER_DIR
+points elsewhere if set); it is loaded by file path. Its output is calmed into the game's
+range by the cleanup below, a copy of better-pixels' `puzzle.calm` (2026-11-14):
   merged      colours too alike to tell apart are folded together, down to a colour budget
   despeckled  a pixel with no same-coloured neighbour takes the commonest colour around it
 """

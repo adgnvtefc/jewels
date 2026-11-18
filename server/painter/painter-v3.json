@@ -1,0 +1,16 @@
+{
+ "model": {
+  "dim": 384,
+  "layers": 8,
+  "heads": 6,
+  "styles": 5
+ },
+ "refs": [
+  "flat",
+  "pixel",
+  "painted"
+ ],
+ "swap": true,
+ "best_step": 15500,
+ "held_out": 0.4047
+}
