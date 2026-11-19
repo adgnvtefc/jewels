@@ -132,6 +132,8 @@ const freePlay = createFreePlay({
   play: puzzle => openPuzzle(puzzle),
   create: () => maker.start(),
   gauntlet: () => gauntlet.start(),
+  inGauntlet: puzzle => gauntlet.isMember(puzzle),
+  gauntletSection: () => gauntlet.section(),
 });
 $('freePlay').onclick = () => freePlay.open();
 $('createHome').onclick = () => maker.start();
@@ -176,7 +178,7 @@ async function sendPuzzle(puzzle, note = text => { $('chatStatus').textContent =
   return true;
 }
 $('chatPuzzle').onclick = () => {
-  const mine = customPuzzles().filter(a => !a.from);
+  const mine = customPuzzles().filter(a => !a.from && gauntlet.revealed(a));  // never a gauntlet puzzle still hidden
   show(`<p class="eyebrow">SEND A PUZZLE</p><h2>Your puzzles</h2>${mine.length ? '<div class="puzzle-list" id="pickList"></div>' : '<p>Nothing here yet. Create one, then send it.</p>'}<button class="primary" id="pickCreate">✦ Create puzzle</button>`);
   for (const puzzle of mine) $('pickList').append(freePlay.card(puzzle, () => { $('modal').close(); sendPuzzle(puzzle); }));
   // A puzzle made from here can go straight to the chat (Send to chat), or wait in this list.
@@ -212,8 +214,9 @@ const maker = createMaker({
 // The gauntlet: five word-soup puzzles in a row, from Free play (gauntlet.js).
 const gauntlet = createGauntlet({
   $, show, esc, thumbnail, track,
-  find: id => customPuzzles().find(a => a.id === id),
+  all: customPuzzles,
   done: puzzle => progress(puzzle) === 1,
+  card: (puzzle, onPick) => freePlay.card(puzzle, onPick),
   movesOf: puzzle => readSave(puzzle.id)?.moves || 0,
   keep: keepMade,
   play: puzzle => openPuzzle(puzzle, null, 'gauntlet'),
@@ -223,6 +226,8 @@ const gauntlet = createGauntlet({
 
 // The old Add to Home Screen pop-up is gone; forget whether it was shown.
 try { localStorage.removeItem('little-jewel:home-screen-hint'); } catch {}
+// Gauntlets are now known from their puzzles' ids; the old per-browser record isn't needed.
+try { for (let i = localStorage.length - 1; i >= 0; i--) { const key = localStorage.key(i); if (key?.endsWith(':gauntlet')) localStorage.removeItem(key); } } catch {}
 
 // The account as the server knows it (id, friends, settings), on every load and sign-in.
 async function refreshAccountState() {

@@ -1,5 +1,5 @@
-// Free play: the bonus puzzles, puzzles sent to you, pictures you made, and the ways to make
-// more (Create your own, the gauntlet). Also the puzzle cards other pop-ups list puzzles with,
+// Free play: the bonus puzzles, puzzles sent to you, your gauntlets, pictures you made, and the
+// ways to make more (Create your own, the gauntlet). Also the puzzle cards other pop-ups list puzzles with,
 // and the "Play the bonus ones here!" pop-up under the start screen's Free play button.
 import { esc } from './dialog.js';
 import { displayName, online, accountPrefs, updatePrefs } from './account.js';
@@ -13,7 +13,8 @@ function browserSeen() { try { return JSON.parse(localStorage.getItem(BONUS_SEEN
 const bonusSeen = () => online() ? accountPrefs().bonus_seen || [] : browserSeen();
 
 // deps: { $, show, thumbnail, progress, bonus: [puzzles], all() → your puzzles and sent ones,
-//         remove(id), play(puzzle), create(), gauntlet() }
+//         remove(id), play(puzzle), create(), gauntlet(),
+//         inGauntlet(puzzle), gauntletSection() → element (gauntlet.js) }
 export function createFreePlay(deps) {
   const { $, show } = deps;
 
@@ -49,12 +50,13 @@ export function createFreePlay(deps) {
   }
 
   function open() {
-    const all = deps.all(), sent = all.filter(a => a.from), mine = all.filter(a => !a.from);
-    show(`<p class="eyebrow">FREE PLAY</p>${deps.bonus.length ? '<h2>Bonus</h2><div class="puzzle-list" id="bonusList"></div>' : ''}${sent.length ? '<h2>Sent to you</h2><div class="puzzle-list" id="sentList"></div>' : ''}<h2>Your puzzles</h2>${mine.length ? '<div class="puzzle-list" id="puzzleList"></div>' : '<p>Nothing here yet. Describe a picture and it becomes a puzzle.</p>'}<button class="primary" id="createOwn">✦ Create your own</button><button class="home-button" id="gauntletStart">⚔ Gauntlet: 5 surprise puzzles</button>`);
+    const all = deps.all(), sent = all.filter(a => a.from), mine = all.filter(a => !a.from && !deps.inGauntlet(a));
+    show(`<p class="eyebrow">FREE PLAY</p>${deps.bonus.length ? '<h2>Bonus</h2><div class="puzzle-list" id="bonusList"></div>' : ''}${sent.length ? '<h2>Sent to you</h2><div class="puzzle-list" id="sentList"></div>' : ''}<div id="gauntletSection"></div><h2>Your puzzles</h2>${mine.length ? '<div class="puzzle-list" id="puzzleList"></div>' : '<p>Nothing here yet. Describe a picture and it becomes a puzzle.</p>'}<button class="primary" id="createOwn">✦ Create your own</button><button class="home-button" id="gauntletStart">⚔ Gauntlet: 5 surprise puzzles</button>`);
     if (deps.bonus.length) seeBonus();
     for (const puzzle of deps.bonus) $('bonusList').append(card(puzzle));
     for (const puzzle of sent) $('sentList').append(removable(puzzle));
     for (const puzzle of mine) $('puzzleList').append(removable(puzzle));
+    $('gauntletSection').append(deps.gauntletSection());
     $('createOwn').onclick = () => deps.create();
     $('gauntletStart').onclick = () => deps.gauntlet();
   }

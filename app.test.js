@@ -38,7 +38,7 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
     querySelector(selector) { return (this.found ??= {})[selector] ??= element(); },
     replaceChildren(...children) { this.children = children; },
     toDataURL: () => 'data:image/png;base64,',
-    append(child) { this.children.push(child); }, remove() {},
+    append(...children) { this.children.push(...children); }, remove() {},
     getBoundingClientRect: () => ({ x: 0, y: 0, left: 0, top: 0, width: 400, height: 400 }),
     getContext: () => ctx, clientWidth: 400,
     animate: () => ({ finished: Promise.resolve() }),
@@ -532,6 +532,41 @@ test('gauntlet: five word-soup puzzles go into Free play and play one after anot
   t.elements.gauntletStart.onclick();
   for (let i = 0; i < 100 && jobs.n < 2; i++) await tick(10);
   assert.equal(jobs.n, 2, 'a finished run starts a new gauntlet');
+});
+
+test('Free play shows gauntlets in their own section, each puzzle revealed only after the one before it', async () => {
+  const art = (id, title) => ({ id, title, width: 2, height: 2, colors: ['#0088ff', '#ffee00'], pixels: [0, 1, 0, 1] });
+  const run = [0, 1, 2, 3, 4].map(n => art(`custom-gmwm0abcd${n}`, `Soup ${n + 1}`));
+  const old = [0, 1, 2, 3, 4].map(n => art(`custom-mwlsg3s5${n}`, `Old soup ${n + 1}`));  // the first gauntlets, before the "g"
+  const own = [art('custom-mwl9gjor', 'My cat'), art('custom-mwl9f7r1', 'Not a gauntlet')];
+  const finish = (t, puzzle) => { t.store[`little-jewel:bob:sorting-v2:${puzzle.id}`] = JSON.stringify({ board: puzzle.pixels, shelf: Array(24).fill(-1), moves: 3 }); };
+  const t = await mount({ stored: { ...signedIn, 'little-jewel:bob:custom-puzzles': JSON.stringify([...run, ...old, ...own]) }, server: fakeServer() });
+  await tick();
+  const section = () => {
+    t.elements.freePlay.onclick();
+    const [box] = t.elements.gauntletSection.children;
+    const lists = box.children.filter((_, n) => n % 2 === 1);
+    return { box, headings: box.children.filter((_, n) => n % 2 === 0).map(h => h.textContent), cards: lists.map(list => list.children.map(card => card.markup || card.innerHTML)) };
+  };
+  let { box, headings, cards } = section();
+  assert.match(box.markup, /<h2>Gauntlets<\/h2>/);
+  assert.equal(cards.length, 2, 'two gauntlets, newest first');
+  assert.match(headings[0], /0 of 5 done/);
+  assert.match(cards[0][0], /Soup 1/, 'the first puzzle is shown');
+  for (const n of [1, 2, 3, 4]) {
+    assert.match(cards[0][n], /Puzzle \d, hidden until/, 'the rest are hidden');
+    assert.doesNotMatch(cards[0][n], /Soup/, 'without their words or pictures');
+  }
+  assert.deepEqual(t.elements.puzzleList.children.map(c => c.markup.match(/puzzle-title">([^<]+)/)[1]).sort(), ['My cat', 'Not a gauntlet'], 'Your puzzles keeps only your own');
+  finish(t, run[0]);
+  ({ headings, cards } = section());
+  assert.match(headings[0], /1 of 5 done/);
+  assert.match(cards[0][1], /Soup 2/, 'finishing puzzle 1 reveals puzzle 2');
+  assert.match(cards[0][2], /hidden until/);
+  t.elements.chatButton.onclick();
+  t.elements.chatPuzzle.onclick();
+  const sendable = t.elements.pickList.children.map(c => c.markup.match(/puzzle-title">([^<]+)/)[1]);
+  assert.ok(sendable.includes('Soup 2') && !sendable.includes('Soup 3') && !sendable.includes('Old soup 2'), 'hidden gauntlet puzzles can\'t be sent');
 });
 
 test('the gauntlet needs an account', async () => {

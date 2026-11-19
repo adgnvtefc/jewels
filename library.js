@@ -8,7 +8,7 @@ import { restore, correctCount } from './game.js';
 
 const ROOT = 'little-jewel:';
 let prefix = ROOT, profileName = null;
-const keys = () => ({ save: `${prefix}sorting-v2:`, custom: `${prefix}custom-puzzles`, removed: `${prefix}removed-puzzles`, sync: `${prefix}sync`, gauntlet: `${prefix}gauntlet` });
+const keys = () => ({ save: `${prefix}sorting-v2:`, custom: `${prefix}custom-puzzles`, removed: `${prefix}removed-puzzles`, sync: `${prefix}sync` });
 export const saveKey = id => keys().save + id;
 export const profile = () => profileName;
 export function useProfile(name) { profileName = name || null; prefix = name ? `${ROOT}${name}:` : ROOT; }
@@ -42,9 +42,6 @@ export function syncMeta() {
     dirty: list(meta.dirty), uploads: list(meta.uploads), removals: list(meta.removals) };
 }
 export const setSyncMeta = meta => write(keys().sync, meta);
-// The gauntlet under way, if any: { ids: [five puzzle ids], started } (gauntlet.js).
-export const gauntletRun = () => read(keys().gauntlet, null);
-export const setGauntletRun = run => run ? write(keys().gauntlet, run) : (drop(keys().gauntlet), true);
 const note = (field, id, add = true) => {
   if (!profileName) return;
   const meta = syncMeta();
