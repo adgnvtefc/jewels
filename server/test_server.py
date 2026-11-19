@@ -510,6 +510,32 @@ class TextTest(Harness):
         self.assertEqual(len(self.texts), 1 + self.db.one("SELECT count(*) FROM accounts")[0])
 
 
+class PrefsTest(Harness):
+    """Per-account settings (prefs.py) and who the server says an account is."""
+
+    def setUp(self):
+        super().setUp()
+        with self.db.transaction() as conn:
+            conn.execute("DELETE FROM account_prefs")
+
+    def test_login_and_me_give_the_account_its_id_and_settings(self):
+        status, body = self.call("POST", "/api/login", {"name": "bob", "password": "second-password"})
+        self.assertEqual((status, body["id"]), (200, accounts.account_id(self.db, "bob")))
+        me = self.call("GET", "/api/me", token=self.bob)[1]
+        self.assertEqual((me["id"], me["name"], me["friends"], me["prefs"]), (body["id"], "bob", ["billy"], {}))
+
+    def test_bonus_seen_only_grows_and_belongs_to_one_account(self):
+        put = lambda change, token=None: self.call("PUT", "/api/prefs", change, token=token or self.bob)
+        self.assertEqual(put({"bonus_seen": ["bonus-ghosts-v1"]}), (200, {"bonus_seen": ["bonus-ghosts-v1"]}))
+        self.assertEqual(put({"bonus_seen": ["bonus-cats-v1", "bonus-ghosts-v1"]})[1], {"bonus_seen": ["bonus-ghosts-v1", "bonus-cats-v1"]},
+                         "added to, never replaced: two browsers can't undo each other")
+        self.assertEqual(self.call("GET", "/api/me", token=self.bob)[1]["prefs"]["bonus_seen"], ["bonus-ghosts-v1", "bonus-cats-v1"])
+        self.assertEqual(self.call("GET", "/api/me", token=self.billy)[1]["prefs"], {}, "only bob's")
+        for bad in ({}, {"theme": "dark"}, {"bonus_seen": "bonus-cats-v1"}, {"bonus_seen": [1]}, {"bonus_seen": ["../x"]}):
+            self.assertEqual(self.call("PUT", "/api/prefs", bad, token=self.bob)[0], 400, bad)
+        self.assertEqual(self.call("PUT", "/api/prefs", {"bonus_seen": []}, token="")[0], 401)
+
+
 class FakeModel:
     """Stands in for Z-Image: a red ball on white, and a note of every prompt."""
 

@@ -260,6 +260,64 @@ function fakeServer({ messages = [], library = [], unread = 0, notify = { messag
   };
 }
 
+// The account as the server knows it: GET /api/me, and PUT /api/prefs merging bonus_seen.
+function accountServer(prefs = {}, base = fakeServer()) {
+  const kept = { ...prefs };
+  return (method, path, body) => {
+    if (path === '/api/me') return [200, { id: 7, name: 'bob', friends: ['billy'], unread: 0, prefs: kept }];
+    if (path === '/api/prefs') { kept.bonus_seen = [...new Set([...(kept.bonus_seen || []), ...body.bonus_seen])]; return [200, { ...kept }]; }
+    return base(method, path, body);
+  };
+}
+
+test('signed in, the bonus pop-up follows the account, not the browser', async () => {
+  const seenElsewhere = await mount({ bonus: 2, stored: signedIn, server: accountServer({ bonus_seen: ['bonus-1', 'bonus-2'] }) });
+  await tick();
+  assert.equal(seenElsewhere.elements.bonusTip.hidden, true, 'seen on another device: no pop-up here, though this browser never saw them');
+  const t = await mount({ bonus: 2, stored: signedIn, server: accountServer() });
+  await tick();
+  assert.equal(t.elements.bonusTip.hidden, false);
+  t.elements.bonusTip.onclick();
+  await tick();
+  assert.deepEqual(t.calls.find(c => c.path === '/api/prefs').body, { bonus_seen: ['bonus-1', 'bonus-2'] }, 'saved with the account');
+  assert.equal(t.store['little-jewel:bonus-seen'], undefined, 'not in this browser');
+  assert.equal(t.elements.bonusTip.hidden, true);
+});
+
+test('what this browser saw as a guest is added to the account when signed in', async () => {
+  const t = await mount({ bonus: 2, stored: { ...signedIn, 'little-jewel:bonus-seen': JSON.stringify(['bonus-1']) }, server: accountServer() });
+  await tick();
+  assert.deepEqual(t.calls.find(c => c.path === '/api/prefs')?.body, { bonus_seen: ['bonus-1'] });
+  const guest = await mount({ bonus: 2, stored: { 'little-jewel:bonus-seen': JSON.stringify(['bonus-1', 'bonus-2']) } });
+  assert.equal(guest.elements.bonusTip.hidden, true, 'a guest still uses this browser\'s');
+});
+
+test('signed in, analytics events carry the account id, never the name; a guest\'s carry none', async () => {
+  const events = [];
+  const t = await mount({ stored: signedIn, server: accountServer(), catseye: (name, data) => events.push([name, data]) });
+  await tick();
+  assert.equal(JSON.parse(t.store['little-jewel:account']).id, 7, 'the id the server gave');
+  t.elements.startGame.onclick();
+  await t.tap(300, 100);
+  t.elements.shelf.children[0].onclick();
+  await t.settle();
+  t.elements.chatButton.onclick();
+  t.elements.chatPuzzle.onclick();
+  t.elements.pickCreate.onclick();
+  t.elements.prompt.value = 'x';
+  t.elements.createForm.onsubmit({ preventDefault() {} });
+  for (let i = 0; i < 50 && !events.length; i++) await tick(10);
+  assert.ok(events.length, 'some events');
+  assert.ok(events.every(([, data]) => data?.account === 7), 'every one with the account id');
+  assert.ok(!JSON.stringify(events).includes('"bob"'), 'never the name');
+  const guestEvents = [], guest = await mount({ catseye: (name, data) => guestEvents.push([name, data]) });
+  guest.elements.accountButton.onclick();  // a failed sign-in is an event, sent as a guest
+  guest.elements.signInName.value = 'bob'; guest.elements.password.value = 'wrong';
+  await guest.elements.signInForm.onsubmit({ preventDefault() {}, target: guest.elements.signInForm });
+  assert.equal(guestEvents.length, 1);
+  assert.ok(!('account' in guestEvents[0][1]));
+});
+
 test('signed in: the corner shows the name, progress is the account’s own, and it syncs', async () => {
   const t = await mount({ stored: signedIn, server: fakeServer({ unread: 2 }) });
   await tick();

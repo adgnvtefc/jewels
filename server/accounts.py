@@ -81,7 +81,7 @@ def login(db: Database, name, password, device: str = "") -> dict | None:
         conn.execute("DELETE FROM sessions WHERE account_id = ? AND token_hash NOT IN "
                      "(SELECT token_hash FROM sessions WHERE account_id = ? ORDER BY last_seen_at DESC LIMIT ?)",
                      (row["id"], row["id"], MAX_SESSIONS))
-    return {"token": token, "name": row["name"], "friends": friends_of(db, row["id"]),
+    return {"token": token, "id": row["id"], "name": row["name"], "friends": friends_of(db, row["id"]),
             "expires_at": now + SESSION_DAYS * DAY}
 
 

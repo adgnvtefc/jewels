@@ -3,9 +3,10 @@
 Data lives in one SQLite file (db.py). Accounts are added on the Mac (accounts.py);
 everything but signing in and the health check needs `Authorization: Bearer <token>`.
 
-    POST   /api/login     {name, password}               -> {token, name, friends, expires_at}, 401 or 429
+    POST   /api/login     {name, password}               -> {token, id, name, friends, expires_at}, 401 or 429
     POST   /api/logout    {everywhere?}                  -> {ok}
-    GET    /api/me                                       -> {name, friends, unread}
+    GET    /api/me                                       -> {id, name, friends, unread, prefs}
+    PUT    /api/prefs     {key: change}                  -> the account's settings (prefs.py), e.g. bonus_seen
     GET    /api/saves?since=<rev>                        -> saves and library rows changed since rev (saves.py)
     PUT    /api/saves     {saves: [{puzzle, state, based_on}]}  -> {rev, results, rejected}
     POST   /api/puzzles   {art}                          -> store a puzzle you made, or bring back one you have
@@ -54,6 +55,7 @@ import accounts  # noqa: E402  (after .env, so DB_FILE can come from it)
 import chat  # noqa: E402
 import gauntlets  # noqa: E402
 import generator  # noqa: E402
+import prefs  # noqa: E402
 import saves  # noqa: E402
 import texts  # noqa: E402
 from db import Database  # noqa: E402
@@ -290,7 +292,8 @@ class Handler(BaseHTTPRequestHandler):
         if not (me := self.account()):
             return
         if path == "/api/me":
-            return self.send(200, {"name": me["name"], "friends": accounts.friends_of(db, me["id"]), "unread": chat.unread(db, me["id"])})
+            return self.send(200, {"id": me["id"], "name": me["name"], "friends": accounts.friends_of(db, me["id"]),
+                                   "unread": chat.unread(db, me["id"]), "prefs": prefs.get(db, me["id"])})
         if path == "/api/notifications":
             return self.send(200, chat.notify_settings(db, me["id"]))
         try:
@@ -368,12 +371,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         path, _ = self.route()
-        if path not in ("/api/saves", "/api/notifications"):
+        if path not in ("/api/saves", "/api/notifications", "/api/prefs"):
             return self.send(404, {"error": "Not found."})
         if not (me := self.account()):
             return
         if path == "/api/notifications":
             return self.send(*chat.set_notify_settings(db, me["id"], self.body()))
+        if path == "/api/prefs":
+            return self.send(*prefs.update(db, me["id"], self.body()))
         body = self.body(MAX_SAVES_BODY)
         if body is None:
             return self.send(400, {"error": "Bad request."})

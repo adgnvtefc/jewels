@@ -18,7 +18,8 @@ if (onThisMachine(override)) setItem(SERVER, override);
 const local = ['localhost', '127.0.0.1'].includes(location.hostname);
 export const serverUrl = () => (onThisMachine(getItem(SERVER)) && getItem(SERVER)) || (local ? 'http://localhost:8787' : PUBLIC_SERVER);
 
-// {name, token, friends}, or null for a guest. token is null when the account must sign in again.
+// {name, token, friends, id, prefs}, or null for a guest. token is null when the account must sign
+// in again. id and prefs come from the server (signIn, refreshAccount).
 export function currentAccount() {
   try {
     const account = JSON.parse(getItem(ACCOUNT));
@@ -63,8 +64,29 @@ export async function request(path, { method = 'GET', body } = {}) {
 
 export async function signIn(name, password) {
   const reply = await request('/api/login', { method: 'POST', body: { name, password } });
-  setItem(ACCOUNT, JSON.stringify({ name: reply.name, token: reply.token, friends: reply.friends || [] }));
+  setItem(ACCOUNT, JSON.stringify({ name: reply.name, token: reply.token, friends: reply.friends || [], id: reply.id }));
   return reply;
+}
+
+// Who the server says this account is: its id, friends and settings, kept with the account.
+export async function refreshAccount() {
+  if (!online()) return null;
+  const me = await request('/api/me'), account = currentAccount();
+  if (account?.name !== me.name) return null;  // signed out or switched meanwhile
+  setItem(ACCOUNT, JSON.stringify({ ...account, id: me.id, friends: me.friends || [], prefs: me.prefs || {} }));
+  return currentAccount();
+}
+// The account's settings (server/prefs.py). A change is kept here at once and sent to the server,
+// which merges it (bonus_seen only ever grows) and answers with all of them.
+export const accountPrefs = () => currentAccount()?.prefs || {};
+export async function updatePrefs(change, local = change) {
+  const account = currentAccount();
+  if (!account?.token) return null;
+  setItem(ACCOUNT, JSON.stringify({ ...account, prefs: { ...account.prefs, ...local } }));
+  const prefs = await request('/api/prefs', { method: 'PUT', body: change });
+  const now = currentAccount();
+  if (now?.name === account.name) setItem(ACCOUNT, JSON.stringify({ ...now, prefs }));
+  return prefs;
 }
 
 // Ends the session on the server (all of them with `everywhere`) and forgets the account here.

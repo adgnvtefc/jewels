@@ -6,7 +6,8 @@ import { customPuzzles, addCustom, readSave, writeSave, snapshot, useProfile, wi
 import { unsent } from './sync.js';
 import { esc } from './dialog.js';
 
-// deps: { $, show, ask, track, syncNow() → Promise, chat: { reset, stop }, home(), shipped() → built-in puzzles }
+// deps: { $, show, ask, track, syncNow() → Promise, refresh() → Promise (the account from the server),
+//         chat: { reset, stop }, home(), shipped() → built-in puzzles }
 export function createAccountUI(deps) {
   const { $, show } = deps;
 
@@ -35,6 +36,7 @@ export function createAccountUI(deps) {
   async function startAccount() {
     useProfile(currentAccount().name);
     deps.chat.reset();
+    await deps.refresh();
     await deps.syncNow();
     await offerGuestProgress();
   }

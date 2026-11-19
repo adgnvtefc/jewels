@@ -2,12 +2,15 @@
 // more (Create your own, the gauntlet). Also the puzzle cards other pop-ups list puzzles with,
 // and the "Play the bonus ones here!" pop-up under the start screen's Free play button.
 import { esc } from './dialog.js';
-import { displayName } from './account.js';
+import { displayName, online, accountPrefs, updatePrefs } from './account.js';
 
 // A pop-up under Free play points at the bonus puzzles until Free play has been opened
-// with them in it, and again whenever new ones arrive. Remembered in this browser only.
+// with them in it, and again whenever new ones arrive. Signed in, it's remembered with the
+// account on the server (bonus_seen), so it follows the account to every browser; a guest's
+// is remembered in this browser.
 const BONUS_SEEN = 'little-jewel:bonus-seen';
-function bonusSeen() { try { return JSON.parse(localStorage.getItem(BONUS_SEEN)) || []; } catch { return []; } }
+function browserSeen() { try { return JSON.parse(localStorage.getItem(BONUS_SEEN)) || []; } catch { return []; } }
+const bonusSeen = () => online() ? accountPrefs().bonus_seen || [] : browserSeen();
 
 // deps: { $, show, thumbnail, progress, bonus: [puzzles], all() → your puzzles and sent ones,
 //         remove(id), play(puzzle), create(), gauntlet() }
@@ -34,8 +37,15 @@ export function createFreePlay(deps) {
     return element;
   }
   function seeBonus() {
-    try { localStorage.setItem(BONUS_SEEN, JSON.stringify([...new Set([...bonusSeen(), ...deps.bonus.map(puzzle => puzzle.id)])])); } catch {}
+    const ids = deps.bonus.map(puzzle => puzzle.id), all = [...new Set([...bonusSeen(), ...ids])];
+    if (online()) updatePrefs({ bonus_seen: ids }, { bonus_seen: all }).catch(() => {});
+    else try { localStorage.setItem(BONUS_SEEN, JSON.stringify(all)); } catch {}
     $('bonusTip').hidden = true;
+  }
+  // Signed in: what this browser saw as a guest counts for the account too.
+  function adoptBrowserSeen() {
+    const mine = accountPrefs().bonus_seen || [], extra = browserSeen().filter(id => !mine.includes(id));
+    if (online() && extra.length) return updatePrefs({ bonus_seen: extra }, { bonus_seen: [...mine, ...extra] }).catch(() => {});
   }
 
   function open() {
@@ -49,5 +59,5 @@ export function createFreePlay(deps) {
     $('gauntletStart').onclick = () => deps.gauntlet();
   }
 
-  return { open, card, bonusWaiting: () => deps.bonus.some(puzzle => !bonusSeen().includes(puzzle.id)) };
+  return { open, card, adoptBrowserSeen, bonusWaiting: () => deps.bonus.some(puzzle => !bonusSeen().includes(puzzle.id)) };
 }

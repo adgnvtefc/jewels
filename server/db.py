@@ -123,6 +123,16 @@ UPGRADES: list[str] = [
     );
     CREATE INDEX gauntlets_account ON gauntlets(account_id, id)
     """,
+    # 5: small per-account settings the game keeps on the server rather than in one browser
+    # (prefs.py), such as which bonus puzzles the account has seen. value is JSON.
+    """
+    CREATE TABLE account_prefs (
+      account_id INTEGER NOT NULL REFERENCES accounts(id),
+      key        TEXT NOT NULL,
+      value      TEXT NOT NULL,
+      PRIMARY KEY (account_id, key)
+    )
+    """,
 ]
 VERSION = 1 + len(UPGRADES)
 

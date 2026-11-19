@@ -1,5 +1,5 @@
 import { builtInPuzzles, customPuzzles, addCustom, removeCustom, progress, thumbnail, readSave, snapshot, mergeSaves, storeSnapshot, packSaves, unpackSaves, useProfile, withProfile, syncMeta } from './library.js';
-import { currentAccount, online, friendName, displayName, takeOldPassword, whenSignedOut } from './account.js';
+import { currentAccount, online, friendName, displayName, takeOldPassword, whenSignedOut, refreshAccount } from './account.js';
 import { createMaker } from './create.js';
 import { createGauntlet } from './gauntlet.js';
 import { syncAccount } from './sync.js';
@@ -13,7 +13,12 @@ import { createBoard } from './board.js';
 const $ = id => document.getElementById(id);
 const { show, ask } = createDialog($);
 // Analytics (catseye, embedded in index.html); a no-op when the embed is absent, as in tests.
-const track = (name, data) => globalThis.catseye?.(name, data);
+// Signed in, every event carries the account's id (never its name), so events can be told
+// apart by account; a guest's carry none.
+const track = (name, data) => {
+  const id = online() ? currentAccount()?.id : null;
+  globalThis.catseye?.(name, id ? { ...data, account: id } : data);
+};
 // The site lives on https. Browsers keep http and https saves apart, so a visit to the
 // http address hands its saves to the https one in the link (never sent to a server) and leaves.
 const SITE = 'momoswebsiteofthehour.com';
@@ -135,7 +140,7 @@ const gallery = createGallery({ show, thumbnail, progress, levels: builtIns, lib
 $('gallery').onclick = () => gallery.open();
 
 // Signing in and out (account-ui.js).
-const accountUI = createAccountUI({ $, show, ask, track, syncNow, chat: { reset: () => chat.reset(), stop: () => chat.stop() }, home: () => goHome(), shipped });
+const accountUI = createAccountUI({ $, show, ask, track, syncNow, refresh: () => refreshAccountState(), chat: { reset: () => chat.reset(), stop: () => chat.stop() }, home: () => goHome(), shipped });
 const signInPrompt = options => accountUI.signIn(options);
 $('accountButton').onclick = () => accountUI.menu();
 
@@ -219,6 +224,13 @@ const gauntlet = createGauntlet({
 // The old Add to Home Screen pop-up is gone; forget whether it was shown.
 try { localStorage.removeItem('little-jewel:home-screen-hint'); } catch {}
 
+// The account as the server knows it (id, friends, settings), on every load and sign-in.
+async function refreshAccountState() {
+  try { await refreshAccount(); await freePlay.adoptBrowserSeen(); } catch { return; }
+  if (!$('home').hidden && !$('modal').open) goHome();
+}
+
 if (online()) chat.reset();
 goHome();
 syncNow();
+refreshAccountState();
