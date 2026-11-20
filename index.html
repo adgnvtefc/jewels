@@ -18,16 +18,15 @@
 </head>
 <body>
   <main id="home" class="home" aria-label="Pixel Game">
-    <button id="accountButton" class="account-button">Sign in</button>
+    <button id="accountButton" class="account-button" aria-haspopup="menu" aria-expanded="false">Sign in</button>
+    <div id="nameMenu" class="name-menu" role="menu" hidden><p id="nameMenuNote"></p><button id="openSettings" role="menuitem">Settings</button><button id="signOutHere" role="menuitem">Sign out</button><button id="signOutAll" role="menuitem">Sign out everywhere</button></div>
     <h1>Pixel Game</h1>
     <ol id="levels" class="levels" aria-label="Levels"></ol>
     <button id="startGame" class="primary start-game">Start game<span id="startLevel"></span></button>
     <button id="freePlay" class="home-button">Free play</button>
-    <button id="bonusTip" class="bonus-tip" hidden>Play the bonus ones here!</button>
     <button id="createHome" class="home-button">✦ Create puzzle</button>
     <button id="gallery" class="home-button">Gallery</button>
     <button id="chatButton" class="home-button chat-button" hidden><span id="chatLabel">Chat</span><span id="unreadBadge" class="badge" hidden></span></button>
-    <button id="settingsButton" class="home-button" hidden>Settings</button>
   </main>
   <main id="game" class="app" aria-label="Pixel Game" hidden>
     <header class="game-top"><span id="puzzleName"></span><span id="moveCount" aria-live="off"></span></header>
@@ -49,6 +48,8 @@
     <p id="chatStatus" class="chat-status-line" role="status"></p>
     <form id="chatForm" class="chat-form"><button type="button" id="chatPuzzle" class="chat-puzzle" aria-label="Send a puzzle">🧩</button><textarea id="chatText" rows="1" maxlength="1000" placeholder="Message" aria-label="Message" enterkeyhint="send"></textarea><button type="submit" id="chatSend" class="chat-send">Send</button></form>
   </main>
+  <main id="freePlayScreen" class="screen" aria-label="Free play" hidden></main>
+  <main id="galleryScreen" class="screen" aria-label="Gallery" hidden></main>
   <main id="settings" class="settings" aria-label="Settings" hidden></main>
   <dialog id="modal"><button class="close" id="close" aria-label="Close dialog">×</button><div id="modalContent"></div></dialog>
   <script>window.catseye=window.catseye||function(){(catseye.q=catseye.q||[]).push(arguments)}</script>

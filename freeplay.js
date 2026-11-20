@@ -1,22 +1,30 @@
-// Free play: the bonus puzzles, puzzles sent to you, your gauntlets, pictures you made, and the
-// ways to make more (Create your own, the gauntlet). Also the puzzle cards other pop-ups list puzzles with,
-// and the "Play the bonus ones here!" pop-up under the start screen's Free play button.
+// Free play, on its own screen: four tabs (Your puzzles, Bonus, Gauntlet, Sent to you), each a
+// grid of puzzle cards. Your puzzles has Create your own; Gauntlet has New gauntlet and your
+// gauntlets (gauntlet.js). Also the puzzle cards other pop-ups list puzzles with.
+// The screen's markup lives here; index.html only has its empty <main id="freePlayScreen">.
 import { esc } from './dialog.js';
-import { displayName, online, accountPrefs, updatePrefs } from './account.js';
+import { displayName, online, friendName, accountPrefs, updatePrefs } from './account.js';
 
-// A pop-up under Free play points at the bonus puzzles until Free play has been opened
-// with them in it, and again whenever new ones arrive. Signed in, it's remembered with the
-// account on the server (bonus_seen), so it follows the account to every browser; a guest's
-// is remembered in this browser.
+const TABS = [['yours', 'Your puzzles'], ['bonus', 'Bonus'], ['gauntlet', 'Gauntlet'], ['sent', 'Sent to you']];
+
+// A dot on the Bonus tab marks bonus puzzles not seen yet, until that tab is opened. Signed in,
+// it's remembered with the account on the server (bonus_seen), so it follows the account to
+// every browser; a guest's is remembered in this browser.
 const BONUS_SEEN = 'little-jewel:bonus-seen';
 function browserSeen() { try { return JSON.parse(localStorage.getItem(BONUS_SEEN)) || []; } catch { return []; } }
 const bonusSeen = () => online() ? accountPrefs().bonus_seen || [] : browserSeen();
 
-// deps: { $, show, thumbnail, progress, bonus: [puzzles], all() → your puzzles and sent ones,
-//         remove(id), play(puzzle), create(), gauntlet(),
-//         inGauntlet(puzzle), gauntletSection() → element (gauntlet.js) }
+// deps: { $, showScreen(id), home(), thumbnail, progress, bonus: [puzzles], all() → your puzzles and sent ones,
+//         remove(id), play(puzzle), create(), gauntlet(), inGauntlet(puzzle),
+//         gauntletSection() → element, or null with no gauntlets (gauntlet.js) }
 export function createFreePlay(deps) {
-  const { $, show } = deps;
+  const { $ } = deps;
+  let tab = 'yours';
+  $('freePlayScreen').innerHTML = `<header class="chat-top"><button id="freePlayBack" class="chat-back" aria-label="Back to the start screen">‹ Back</button><h1>Free play</h1></header>
+    <nav class="tabs" role="tablist" aria-label="Free play">${TABS.map(([key, name]) => `<button role="tab" id="${key}Tab" aria-controls="freePlayBody">${name}${key === 'bonus' ? '<span class="tab-dot" id="bonusDot" aria-label="new" hidden></span>' : ''}</button>`).join('')}</nav>
+    <div class="screen-body" id="freePlayBody" role="tabpanel"></div>`;
+  for (const [key] of TABS) $(`${key}Tab`).onclick = () => render(key);
+  $('freePlayBack').onclick = () => deps.home();
 
   // A puzzle as a card: picture, title, and how far along it is.
   function card(puzzle, onPick = () => { $('modal').close(); deps.play(puzzle); }) {
@@ -32,16 +40,16 @@ export function createFreePlay(deps) {
     remove.className = 'puzzle-remove'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${puzzle.title}`);
     remove.onclick = () => {
       if (!confirm(puzzle.from ? `Remove “${puzzle.title}” and your progress on it? It stays in your chat.` : `Remove “${puzzle.title}” and its progress?`)) return;
-      deps.remove(puzzle.id); open();
+      deps.remove(puzzle.id); render(tab);
     };
     element.append(remove);
     return element;
   }
+  const bonusWaiting = () => deps.bonus.some(puzzle => !bonusSeen().includes(puzzle.id));
   function seeBonus() {
     const ids = deps.bonus.map(puzzle => puzzle.id), all = [...new Set([...bonusSeen(), ...ids])];
     if (online()) updatePrefs({ bonus_seen: ids }, { bonus_seen: all }).catch(() => {});
     else try { localStorage.setItem(BONUS_SEEN, JSON.stringify(all)); } catch {}
-    $('bonusTip').hidden = true;
   }
   // Signed in: what this browser saw as a guest counts for the account too.
   function adoptBrowserSeen() {
@@ -49,17 +57,40 @@ export function createFreePlay(deps) {
     if (online() && extra.length) return updatePrefs({ bonus_seen: extra }, { bonus_seen: [...mine, ...extra] }).catch(() => {});
   }
 
-  function open() {
-    const all = deps.all(), sent = all.filter(a => a.from), mine = all.filter(a => !a.from && !deps.inGauntlet(a));
-    show(`<p class="eyebrow">FREE PLAY</p>${deps.bonus.length ? '<h2>Bonus</h2><div class="puzzle-list" id="bonusList"></div>' : ''}${sent.length ? '<h2>Sent to you</h2><div class="puzzle-list" id="sentList"></div>' : ''}<div id="gauntletSection"></div><h2>Your puzzles</h2>${mine.length ? '<div class="puzzle-list" id="puzzleList"></div>' : '<p>Nothing here yet. Describe a picture and it becomes a puzzle.</p>'}<button class="primary" id="createOwn">✦ Create your own</button><button class="home-button" id="gauntletStart">⚔ Gauntlet: 5 surprise puzzles</button>`);
-    if (deps.bonus.length) seeBonus();
-    for (const puzzle of deps.bonus) $('bonusList').append(card(puzzle));
-    for (const puzzle of sent) $('sentList').append(removable(puzzle));
-    for (const puzzle of mine) $('puzzleList').append(removable(puzzle));
-    $('gauntletSection').append(deps.gauntletSection());
-    $('createOwn').onclick = () => deps.create();
-    $('gauntletStart').onclick = () => deps.gauntlet();
+  // One tab's cards; the other tabs are remembered as they were.
+  function render(which) {
+    tab = which;
+    for (const [key] of TABS) $(`${key}Tab`).setAttribute('aria-selected', String(key === tab));
+    const body = $('freePlayBody'), list = id => `<div class="puzzle-list" id="${id}"></div>`;
+    const all = deps.all();
+    if (tab === 'yours') {
+      const mine = all.filter(a => !a.from && !deps.inGauntlet(a));
+      body.innerHTML = `<button class="primary" id="createOwn">✦ Create your own</button>${mine.length ? list('puzzleList') : '<p>Nothing here yet. Describe a picture and it becomes a puzzle.</p>'}`;
+      for (const puzzle of mine) $('puzzleList').append(removable(puzzle));
+      $('createOwn').onclick = () => deps.create();
+    } else if (tab === 'bonus') {
+      if (bonusWaiting()) seeBonus();
+      body.innerHTML = deps.bonus.length ? list('bonusList') : '<p>No bonus puzzles right now.</p>';
+      for (const puzzle of deps.bonus) $('bonusList').append(card(puzzle));
+    } else if (tab === 'gauntlet') {
+      const section = deps.gauntletSection();
+      body.innerHTML = `<button class="primary" id="gauntletStart">⚔ New gauntlet</button>${section ? '<div id="gauntletSection"></div>' : '<p>Five surprise puzzles, each painted from a random handful of words, played one after another.</p>'}`;
+      if (section) $('gauntletSection').append(section);
+      $('gauntletStart').onclick = () => deps.gauntlet();
+    } else {
+      const sent = all.filter(a => a.from), friend = friendName();
+      body.innerHTML = sent.length ? list('sentList') : `<p>Puzzles ${friend ? esc(displayName(friend)) : 'a friend'} sends you in the chat land here.</p>`;
+      for (const puzzle of sent) $('sentList').append(removable(puzzle));
+    }
+    $('bonusDot').hidden = !bonusWaiting();
+    body.scrollTop = 0;
   }
 
-  return { open, card, adoptBrowserSeen, bonusWaiting: () => deps.bonus.some(puzzle => !bonusSeen().includes(puzzle.id)) };
+  // Opens on the tab it was last on, or the one asked for.
+  function open(which = tab) {
+    deps.showScreen('freePlayScreen');
+    render(which);
+  }
+
+  return { open, card, adoptBrowserSeen, isOpen: () => !$('freePlayScreen').hidden };
 }

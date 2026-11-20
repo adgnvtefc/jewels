@@ -130,7 +130,13 @@ test('minimal UI loads and transfers board → shelf → board without camera ju
   assert.equal(t.elements.game.hidden, true);
   assert.equal(t.elements.startGame.disabled, true, 'the only level is complete');
   t.elements.gallery.onclick();
-  assert.match(t.elements.modalContent.markup, /gallery-item/);
+  assert.equal(t.elements.galleryScreen.hidden, false, 'the gallery is a screen of its own');
+  assert.equal(t.elements.home.hidden, true);
+  assert.equal(t.elements.galleryList.children.length, 1, 'the finished level hangs there');
+  t.elements.galleryList.children[0].onclick();
+  assert.match(t.elements.modalContent.markup, /LEVEL 1.*Save to camera roll/);
+  t.elements.galleryBack.onclick();
+  assert.equal(t.elements.home.hidden, false);
 });
 
 test('pinch zooms in and out, never moves jewels, and a cancelled gesture leaves taps usable', async () => {
@@ -165,9 +171,9 @@ test('the start screen offers levels, free play and the gallery; Menu returns to
   assert.equal(t.elements.game.hidden, true);
   assert.equal(t.elements.startLevel.textContent, 'Level 1 of 1');
   t.elements.gallery.onclick();
-  assert.match(t.elements.modalContent.markup, /Finish a puzzle/);
+  assert.match(t.elements.galleryBody.markup, /Finish a puzzle/);
   t.elements.freePlay.onclick();
-  assert.equal(t.elements.modal.open, true);
+  assert.equal(t.elements.freePlayScreen.hidden, false, 'Free play is a screen of its own');
   t.elements.createOwn.onclick();
   assert.ok(t.elements.signInForm, 'a guest is asked to sign in');
   assert.match(t.elements.modalContent.markup, /Creating puzzles needs an account/);
@@ -204,11 +210,11 @@ test('saves carried in the link are merged in on https, and the link is cleaned 
   assert.equal(t.elements.startGame.disabled, true, 'the level shows as complete');
 });
 
-test('the start screen has no skip button any more, and no bonus pop-up without bonus puzzles', async () => {
+test('the start screen has no skip button and no bonus bubble', async () => {
   const t = await mount({ levels: 11 });
   assert.equal(t.elements.skipAhead, undefined);
   assert.equal(t.elements.startLevel.textContent, 'Level 1 of 11');
-  assert.equal(t.elements.bonusTip.hidden, true, 'no bonus puzzles, no pop-up');
+  assert.equal(t.elements.bonusTip, undefined, 'the bonus bubble is gone; Free play\'s Bonus tab has a dot instead');
 });
 
 test('the move counter shows the moves so far, and the header names the level', async () => {
@@ -222,13 +228,14 @@ test('the move counter shows the moves so far, and the header names the level', 
   assert.equal(t.elements.moveCount.textContent, '2 moves');
 });
 
-test('bonus puzzles live in Free play, not the levels, and the pop-up goes once Free play opens', async () => {
+test('bonus puzzles live on Free play\'s Bonus tab, not the levels, and its dot goes once the tab opens', async () => {
   const t = await mount({ bonus: 2 });
   assert.equal(t.elements.startLevel.textContent, 'Level 1 of 1');
-  assert.equal(t.elements.bonusTip.hidden, false);
-  t.elements.bonusTip.onclick();
+  t.elements.freePlay.onclick();
+  assert.equal(t.elements.bonusDot.hidden, false, 'new bonus puzzles: a dot on the tab');
+  t.elements.bonusTab.onclick();
   assert.equal(t.elements.bonusList.children.length, 2);
-  assert.equal(t.elements.bonusTip.hidden, true);
+  assert.equal(t.elements.bonusDot.hidden, true);
   t.elements.bonusList.children[1].querySelector('.puzzle-pick').onclick();
   assert.equal(t.elements.game.hidden, false);
   t.board.onpointerdown(t.pointer(1, 300, 100, 'pointerdown'));
@@ -238,7 +245,9 @@ test('bonus puzzles live in Free play, not the levels, and the pop-up goes once 
   await t.settle();
   assert.equal(t.saves['bonus-2'].moves, 1, 'a bonus puzzle saves under its own id');
   t.elements.menu.onclick();
-  assert.equal(t.elements.bonusTip.hidden, true, 'the pop-up stays gone');
+  assert.equal(t.elements.freePlayScreen.hidden, false, 'back to Free play');
+  assert.equal(t.elements.bonusList.children.length, 2, 'on the tab it was on');
+  assert.equal(t.elements.bonusDot.hidden, true, 'the dot stays gone');
   assert.equal(t.elements.startLevel.textContent, 'Level 1 of 1');
 });
 
@@ -270,18 +279,20 @@ function accountServer(prefs = {}, base = fakeServer()) {
   };
 }
 
-test('signed in, the bonus pop-up follows the account, not the browser', async () => {
+test('signed in, the Bonus tab\'s dot follows the account, not the browser', async () => {
   const seenElsewhere = await mount({ bonus: 2, stored: signedIn, server: accountServer({ bonus_seen: ['bonus-1', 'bonus-2'] }) });
   await tick();
-  assert.equal(seenElsewhere.elements.bonusTip.hidden, true, 'seen on another device: no pop-up here, though this browser never saw them');
+  seenElsewhere.elements.freePlay.onclick();
+  assert.equal(seenElsewhere.elements.bonusDot.hidden, true, 'seen on another device: no dot here, though this browser never saw them');
   const t = await mount({ bonus: 2, stored: signedIn, server: accountServer() });
   await tick();
-  assert.equal(t.elements.bonusTip.hidden, false);
-  t.elements.bonusTip.onclick();
+  t.elements.freePlay.onclick();
+  assert.equal(t.elements.bonusDot.hidden, false);
+  t.elements.bonusTab.onclick();
   await tick();
   assert.deepEqual(t.calls.find(c => c.path === '/api/prefs').body, { bonus_seen: ['bonus-1', 'bonus-2'] }, 'saved with the account');
   assert.equal(t.store['little-jewel:bonus-seen'], undefined, 'not in this browser');
-  assert.equal(t.elements.bonusTip.hidden, true);
+  assert.equal(t.elements.bonusDot.hidden, true);
 });
 
 test('what this browser saw as a guest is added to the account when signed in', async () => {
@@ -289,7 +300,8 @@ test('what this browser saw as a guest is added to the account when signed in', 
   await tick();
   assert.deepEqual(t.calls.find(c => c.path === '/api/prefs')?.body, { bonus_seen: ['bonus-1'] });
   const guest = await mount({ bonus: 2, stored: { 'little-jewel:bonus-seen': JSON.stringify(['bonus-1', 'bonus-2']) } });
-  assert.equal(guest.elements.bonusTip.hidden, true, 'a guest still uses this browser\'s');
+  guest.elements.freePlay.onclick();
+  assert.equal(guest.elements.bonusDot.hidden, true, 'a guest still uses this browser\'s');
 });
 
 test('signed in, analytics events carry the account id, never the name; a guest\'s carry none', async () => {
@@ -334,14 +346,20 @@ test('signed in: the corner shows the name, progress is the account’s own, and
   assert.deepEqual(JSON.parse(t.store['little-jewel:bob:sync']).dirty, ['interaction-test'], 'noted for the next sync');
 });
 
-test('Settings shows only when signed in and saves each chat notification switch to the server', async () => {
+test('Settings is in the name menu, signed in only, and saves each chat notification switch to the server', async () => {
   const guest = await mount();
-  assert.equal(guest.elements.settingsButton.hidden, true, 'guests have no settings');
+  guest.elements.accountButton.onclick();
+  assert.notEqual(guest.elements.nameMenu.hidden, false, 'a guest gets the sign-in pop-up, not the menu');
+  assert.ok(guest.elements.signInForm);
   const notify = { messages: true, puzzles: false, finished: true };
   const t = await mount({ stored: signedIn, server: fakeServer({ notify }) });
   await tick();
-  assert.equal(t.elements.settingsButton.hidden, false);
-  t.elements.settingsButton.onclick();
+  t.elements.accountButton.onclick();
+  assert.equal(t.elements.nameMenu.hidden, false, 'the name opens its menu');
+  assert.equal(t.elements.nameMenuNote.textContent, 'Signed in as Bob');
+  assert.notEqual(t.elements.modal.open, true, 'a menu, not a pop-up');
+  t.elements.openSettings.onclick();
+  assert.equal(t.elements.nameMenu.hidden, true);
   await tick();
   assert.equal(t.elements.settings.hidden, false); assert.equal(t.elements.home.hidden, true);
   assert.deepEqual([t.elements.notifyMessages.checked, t.elements.notifyPuzzles.checked, t.elements.notifyFinished.checked], [true, false, true], 'shows what the server has');
@@ -387,9 +405,11 @@ test('puzzles sent to you show in Free play, and only your own can be picked to 
     server: fakeServer({ library: [{ puzzle: sent.id, art: sent, from: 'billy', rev: 3, removed: false }] }) });
   await tick();
   t.elements.freePlay.onclick();
+  t.elements.sentTab.onclick();
   assert.equal(t.elements.sentList.children.length, 1);
   assert.match(t.elements.sentList.children[0].markup, /from Billy/);
   assert.match(t.elements.sentList.children[0].markup, /From &#60;b&#62;her/, 'titles are escaped');
+  t.elements.yoursTab.onclick();
   assert.equal(t.elements.puzzleList.children.length, 1);
   t.elements.chatButton.onclick();
   t.elements.chatPuzzle.onclick();
@@ -426,7 +446,9 @@ test('signing out removes the account’s copy from this browser', async () => {
   const t = await mount({ stored: { ...signedIn, 'little-jewel:bob:sorting-v2:interaction-test': '{}' }, server: fakeServer() });
   await tick();
   t.elements.accountButton.onclick();
+  assert.equal(t.elements.nameMenu.hidden, false);
   await t.elements.signOutHere.onclick();
+  assert.equal(t.elements.nameMenu.hidden, true);
   assert.equal(t.store['little-jewel:account'], undefined);
   assert.equal(t.elements.accountButton.textContent, 'Sign in');
   assert.equal(t.elements.chatButton.hidden, true);
@@ -500,6 +522,7 @@ test('gauntlet: five word-soup puzzles go into Free play and play one after anot
   const t = await mount({ stored: signedIn, server, catseye: (name, data) => events.push([name, data]) });
   await tick();
   t.elements.freePlay.onclick();
+  t.elements.gauntletTab.onclick();
   t.elements.gauntletStart.onclick();
   for (let i = 0; i < 300 && t.elements.game.hidden !== false; i++) await tick(10);
   assert.equal(jobs.n, 1, 'one request for all five');
@@ -518,6 +541,7 @@ test('gauntlet: five word-soup puzzles go into Free play and play one after anot
   // Leave, and come back later: the run continues where it stopped.
   t.elements.menu.onclick();
   t.elements.freePlay.onclick();
+  t.elements.gauntletTab.onclick();
   t.elements.gauntletStart.onclick();
   assert.match(t.elements.modalContent.markup, /Puzzle 2 of 5 is waiting/);
   t.elements.gauntletGo.onclick();
@@ -529,12 +553,13 @@ test('gauntlet: five word-soup puzzles go into Free play and play one after anot
   assert.match(t.elements.modalContent.markup, /15 moves in all/);
   t.elements.gauntletHome.onclick();
   t.elements.freePlay.onclick();
+  t.elements.gauntletTab.onclick();
   t.elements.gauntletStart.onclick();
   for (let i = 0; i < 100 && jobs.n < 2; i++) await tick(10);
   assert.equal(jobs.n, 2, 'a finished run starts a new gauntlet');
 });
 
-test('Free play shows gauntlets in their own section, each puzzle revealed only after the one before it', async () => {
+test('Free play shows gauntlets on their own tab, each puzzle revealed only after the one before it', async () => {
   const art = (id, title) => ({ id, title, width: 2, height: 2, colors: ['#0088ff', '#ffee00'], pixels: [0, 1, 0, 1] });
   const run = [0, 1, 2, 3, 4].map(n => art(`custom-gmwm0abcd${n}`, `Soup ${n + 1}`));
   const old = [0, 1, 2, 3, 4].map(n => art(`custom-mwlsg3s5${n}`, `Old soup ${n + 1}`));  // the first gauntlets, before the "g"
@@ -544,12 +569,12 @@ test('Free play shows gauntlets in their own section, each puzzle revealed only 
   await tick();
   const section = () => {
     t.elements.freePlay.onclick();
+    t.elements.gauntletTab.onclick();
     const [box] = t.elements.gauntletSection.children;
     const lists = box.children.filter((_, n) => n % 2 === 1);
     return { box, headings: box.children.filter((_, n) => n % 2 === 0).map(h => h.textContent), cards: lists.map(list => list.children.map(card => card.markup || card.innerHTML)) };
   };
   let { box, headings, cards } = section();
-  assert.match(box.markup, /<h2>Gauntlets<\/h2>/);
   assert.equal(cards.length, 2, 'two gauntlets, newest first');
   assert.match(headings[0], /0 of 5 done/);
   assert.match(cards[0][0], /Soup 1/, 'the first puzzle is shown');
@@ -557,6 +582,7 @@ test('Free play shows gauntlets in their own section, each puzzle revealed only 
     assert.match(cards[0][n], /Puzzle \d, hidden until/, 'the rest are hidden');
     assert.doesNotMatch(cards[0][n], /Soup/, 'without their words or pictures');
   }
+  t.elements.yoursTab.onclick();
   assert.deepEqual(t.elements.puzzleList.children.map(c => c.markup.match(/puzzle-title">([^<]+)/)[1]).sort(), ['My cat', 'Not a gauntlet'], 'Your puzzles keeps only your own');
   finish(t, run[0]);
   ({ headings, cards } = section());
@@ -572,6 +598,7 @@ test('Free play shows gauntlets in their own section, each puzzle revealed only 
 test('the gauntlet needs an account', async () => {
   const t = await mount();
   t.elements.freePlay.onclick();
+  t.elements.gauntletTab.onclick();
   t.elements.gauntletStart.onclick();
   assert.match(t.elements.modalContent.markup, /The gauntlet needs an account/);
 });
@@ -615,7 +642,7 @@ test('Create puzzle: Save to Free play keeps it there; closing the pop-up keeps 
   assert.equal(made(t).length, 1, 'a late close event from an earlier pop-up is ignored while this one is open');
   t.elements.modal.close(); t.elements.modal.onclose();
   assert.equal(made(t).length, 2, 'closed with ×, still kept');
-  assert.equal(t.elements.home.hidden, false);
+  assert.equal(t.elements.freePlayScreen.hidden, false, 'and the screen stays where it was: Free play, where Save to Free play went');
 });
 
 test('Create puzzle: Try again throws the version away and paints the same idea again', async () => {

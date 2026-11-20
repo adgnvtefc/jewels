@@ -28,8 +28,8 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid #c47b46; outline
   padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
 }
 .home h1 { font: clamp(32px, 6dvh, 44px) Georgia, serif; letter-spacing: -1px; margin: 0; }
-.levels { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; list-style: none; padding: 0; margin: clamp(6px, 2dvh, 18px) 0 clamp(8px, 2.6dvh, 22px); }
-.level-pip { display: grid; place-items: center; width: clamp(28px, 5.2dvh, 44px); height: clamp(28px, 5.2dvh, 44px); border-radius: 9px; overflow: hidden; font-size: 13px; color: #a3ab9f; background: #ece9de; border: 1px solid #e3e6da; }
+.levels { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; width: min(280px, 72vw, 34dvh); list-style: none; padding: 0; margin: clamp(6px, 2dvh, 18px) 0 clamp(10px, 2.8dvh, 24px); }
+.level-pip { display: grid; place-items: center; aspect-ratio: 1; border-radius: 10px; overflow: hidden; font-size: 13px; color: #a3ab9f; background: #ece9de; border: 1px solid #e3e6da; }
 .level-pip img { width: 100%; height: 100%; image-rendering: pixelated; }
 .level-pip.current { background: #fff; color: #3f6d59; font-weight: 600; border-color: #3f6d59; box-shadow: 0 0 0 1px #3f6d59; }
 .level-pip.done { border-color: #fff; box-shadow: 0 2px 6px #294b451a; }
@@ -90,7 +90,7 @@ dialog .puzzle-pick img, dialog .candidate img, dialog .gallery-item img { margi
 .puzzle-hidden { display: grid; place-items: center; aspect-ratio: 1; border-radius: 6px; background: #ece9de; color: #a3ab9f; font: 28px Georgia, serif; }
 .hidden-card .puzzle-pick { cursor: default; }
 .gauntlet-heading { margin: 14px 0 -8px; font-size: 12px; color: #748478; }
-.gallery-item { display: grid; gap: 4px; margin: 0; padding: 8px; border-radius: 14px; background: #fff; border: 1px solid #e3e6da; }
+.gallery-item { display: grid; gap: 4px; margin: 0; padding: 8px; border-radius: 14px; background: #fff; border: 1px solid #e3e6da; text-align: left; }
 .gallery-item figcaption { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .puzzle-remove { position: absolute; top: 2px; right: 2px; width: 32px; height: 32px; border-radius: 50%; background: #f8f7f2e6; font-size: 18px; line-height: 1; }
 .unlock input, .create-form input {
@@ -111,13 +111,7 @@ dialog .puzzle-pick img, dialog .candidate img, dialog .gallery-item img { margi
   .progress { grid-column: 2; grid-row: 3; }
   .tray { grid-column: 2; grid-row: 4; }
 }
-.bonus-tip {
-  position: relative; margin: 0 0 6px; padding: 8px 16px; border-radius: 16px; background: #c47b46; color: #fff;
-  font-size: 13px; font-weight: 600; box-shadow: 0 4px 14px #c47b4640; animation: bob 1.8s ease-in-out infinite;
-}
-.bonus-tip::before { content: ''; position: absolute; left: 50%; top: -6px; margin-left: -7px; border: 7px solid transparent; border-top: 0; border-bottom-color: #c47b46; }
-@keyframes bob { 50% { transform: translateY(-3px); } }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } .bonus-tip { animation: none; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
 /* Accounts */
 .home { position: relative; }
 .account-button {
@@ -132,12 +126,12 @@ dialog .home-button { width: 100%; max-width: none; margin-top: 10px; }
 .badge { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: #c47b46; color: #fff; font-size: 11px; font-weight: 600; line-height: 20px; }
 
 /* Chat */
-.chat, .settings {
+.chat, .settings, .screen {
   display: flex; flex-direction: column; max-width: 600px; margin: auto;
   height: var(--viewport-height, 100dvh);
   padding: env(safe-area-inset-top) env(safe-area-inset-right) max(8px, env(safe-area-inset-bottom)) env(safe-area-inset-left);
 }
-.chat[hidden], .settings[hidden] { display: none; }
+.chat[hidden], .settings[hidden], .screen[hidden] { display: none; }
 .chat-top { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #e3e6da; }
 .chat-top h1 { margin: 0; font: 22px Georgia, serif; }
 .chat-back { min-height: 44px; padding: 0 8px 0 0; font-size: 14px; color: #3c614f; }
@@ -179,3 +173,25 @@ button.chat-status { color: #a3602f; text-decoration: underline; min-height: 24p
 .setting { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 0 14px; border: 1px solid #d9ddcf; border-radius: 14px; background: #fff; font-size: 15px; color: #294b45; }
 .setting input { width: 22px; height: 22px; margin: 0; accent-color: #3f6d59; }
 .settings-status { min-height: 1.4em; }
+
+/* The name menu, under the name in the corner */
+.name-menu {
+  position: absolute; z-index: 3; top: calc(max(12px, env(safe-area-inset-top)) + 42px); right: max(12px, env(safe-area-inset-right));
+  min-width: 200px; padding: 6px; border-radius: 18px; background: #fff; border: 1px solid #e3e6da; box-shadow: 0 12px 40px #193a4424; text-align: left;
+}
+.name-menu p { margin: 0 0 2px; padding: 10px 12px 8px; font-size: 11px; line-height: 1.4; color: #748478; border-bottom: 1px solid #eeede6; }
+.name-menu button { display: block; width: 100%; min-height: 44px; padding: 0 12px; border-radius: 12px; text-align: left; font-size: 15px; color: #3c614f; }
+.name-menu button:active { background: #f3f2ec; }
+
+/* Free play and the gallery, each on its own screen */
+.screen-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 16px 24px; }
+.screen-body > p { font-size: 14px; line-height: 1.6; color: #748478; }
+.screen .primary { margin-top: 14px; }
+.screen .puzzle-list { margin-top: 14px; }
+.screen .puzzle-pick img, .screen .gallery-item img { display: block; width: 100%; aspect-ratio: 1; image-rendering: pixelated; border-radius: 8px; }
+.screen .gauntlet-heading { margin: 18px 2px -6px; }
+.tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin: 12px 16px 0; padding: 4px; border-radius: 16px; background: #ece9de; }
+.tabs button { position: relative; min-height: 40px; padding: 0 2px; border-radius: 12px; font-size: 12px; line-height: 1.15; color: #5d7466; }
+.tabs button[aria-selected="true"] { background: #fff; color: #294b45; font-weight: 600; box-shadow: 0 1px 3px #17372b1f; }
+.tab-dot { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: #c47b46; }
+.save-note { min-height: 1.4em; margin: 8px 0 0; text-align: center; font-size: 12px !important; }

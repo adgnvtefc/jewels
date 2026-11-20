@@ -4,8 +4,8 @@
 //
 // A gauntlet's five puzzles share an id stem: custom-g<stem>0 … custom-g<stem>4 (the first
 // gauntlets, before the "g", were custom-<stem>0 … 4). So every device can tell which
-// puzzles belong together and in what order, from the ids alone. Free play shows them in a
-// section of their own, revealed one at a time: a puzzle stays hidden until the one before
+// puzzles belong together and in what order, from the ids alone. Free play shows them on its
+// Gauntlet tab, revealed one at a time: a puzzle stays hidden until the one before
 // it is finished.
 import { requestPuzzles, pictureToArt } from './generator.js';
 import { online, ServerError } from './account.js';
@@ -15,7 +15,7 @@ const MEMBER = /^custom-(g?)([a-z0-9]{8})([0-9])$/;
 
 // deps: { $, show(markup, then), esc, thumbnail, track, all() → your puzzles, done(art) → finished?,
 //         movesOf(art), keep(puzzle) → saved?, play(puzzle), card(puzzle, onPick) → element,
-//         signIn(note, then), home() }
+//         signIn(note, then), back() → Free play's Gauntlet tab }
 export function createGauntlet(deps) {
   const { $, show, esc } = deps;
   let run = 0;  // the latest request; one whose pop-up closed is dropped
@@ -88,11 +88,11 @@ export function createGauntlet(deps) {
     // Whether this puzzle belongs to a gauntlet, and whether it can be seen yet.
     isMember: art => Boolean(runOf(art)),
     revealed(art) { const g = runOf(art); return !g || revealedIn(g)[g.puzzles.findIndex(a => a.id === art.id)]; },
-    // Free play's Gauntlets section: each gauntlet, newest first, its puzzles revealed one at a time.
+    // Free play's Gauntlet tab: each gauntlet, newest first, its puzzles revealed one at a time;
+    // null with none yet.
     section() {
       const all = runs(), box = document.createElement('div');
-      if (!all.length) return box;
-      box.innerHTML = '<h2>Gauntlets</h2>';
+      if (!all.length) return null;
       for (const g of all) {
         const shown = revealedIn(g), finished = g.puzzles.filter(deps.done).length;
         const heading = document.createElement('p');
@@ -110,17 +110,17 @@ export function createGauntlet(deps) {
     // The finish pop-up for a gauntlet puzzle: on to the next, or the whole gauntlet at the end.
     finished(art) {
       const g = runOf(art);
-      if (!g) return deps.home();
+      if (!g) return deps.back();
       const n = g.puzzles.findIndex(a => a.id === art.id), next = nextIn(g);
       if (next) {
-        let going = false;  // closing the pop-up any other way goes back to the start screen
-        show(`<p class="eyebrow">GAUNTLET · ${n + 1} OF ${SIZE} DONE</p><h2>${esc(art.title)}</h2><img src="${deps.thumbnail(art, 8)}" alt="Your completed puzzle"><button class="primary" id="gauntletNext">Next puzzle</button>`, () => { if (!going) deps.home(); });
+        let going = false;  // closing the pop-up any other way goes back to Free play
+        show(`<p class="eyebrow">GAUNTLET · ${n + 1} OF ${SIZE} DONE</p><h2>${esc(art.title)}</h2><img src="${deps.thumbnail(art, 8)}" alt="Your completed puzzle"><button class="primary" id="gauntletNext">Next puzzle</button>`, () => { if (!going) deps.back(); });
         $('gauntletNext').onclick = () => { going = true; $('modal').close(); deps.play(next); };
         return;
       }
       const moves = g.puzzles.reduce((sum, a) => sum + deps.movesOf(a), 0);
       deps.track('gauntlet_done', { moves, puzzles: SIZE });
-      show(`<p class="eyebrow">GAUNTLET COMPLETE</p><h2>All ${SIZE} restored</h2><p>${moves} moves in all.</p><div class="puzzle-list">${g.puzzles.map(a => `<figure class="gallery-item"><img alt="${esc(a.title)}" src="${deps.thumbnail(a)}"><figcaption>${esc(a.title)}</figcaption></figure>`).join('')}</div><button class="primary" id="gauntletHome">Back to start</button>`, deps.home);
+      show(`<p class="eyebrow">GAUNTLET COMPLETE</p><h2>All ${SIZE} restored</h2><p>${moves} moves in all.</p><div class="puzzle-list">${g.puzzles.map(a => `<figure class="gallery-item"><img alt="${esc(a.title)}" src="${deps.thumbnail(a)}"><figcaption>${esc(a.title)}</figcaption></figure>`).join('')}</div><button class="primary" id="gauntletHome">Back to Free play</button>`, deps.back);
       $('gauntletHome').onclick = () => $('modal').close();
     },
   };

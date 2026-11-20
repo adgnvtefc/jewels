@@ -1,5 +1,5 @@
-// The account pop-ups: signing in (and in again), offering a guest's progress to the account,
-// and signing out. Accounts are invite-only and added on the Mac. A sign-in that ran out keeps
+// The account: the name menu in the corner (Settings, signing out), and the pop-ups for signing
+// in (and in again) and offering a guest's progress to the account. Accounts are invite-only and added on the Mac. A sign-in that ran out keeps
 // the name (and this browser's copy of that account's progress) and asks only for the password.
 import { currentAccount, displayName, signIn, signOut } from './account.js';
 import { customPuzzles, addCustom, readSave, writeSave, snapshot, useProfile, withProfile, clearProfile, forget, jewelsHome } from './library.js';
@@ -7,7 +7,7 @@ import { unsent } from './sync.js';
 import { esc } from './dialog.js';
 
 // deps: { $, show, ask, track, syncNow() → Promise, refresh() → Promise (the account from the server),
-//         chat: { reset, stop }, home(), shipped() → built-in puzzles }
+//         chat: { reset, stop }, home(), settings(), shipped() → built-in puzzles }
 export function createAccountUI(deps) {
   const { $, show } = deps;
 
@@ -58,16 +58,31 @@ export function createAccountUI(deps) {
     await deps.syncNow();
   }
 
-  // The corner button: who is signed in, or the sign-in pop-up.
+  // The corner button: signed in, it opens the name menu under it; otherwise the sign-in pop-up.
+  function showMenu(open) {
+    $('nameMenu').hidden = !open;
+    $('accountButton').setAttribute('aria-expanded', String(open));
+  }
   function menu() {
     const account = currentAccount();
-    if (!account?.token) return signInPrompt();
-    show(`<p class="eyebrow">SIGNED IN</p><h2>${esc(displayName(account.name))}</h2><p>${unsent() ? 'Some progress is still on its way to the server.' : 'Your progress is saved on the server.'}</p><button class="home-button" id="signOutHere">Sign out</button><button class="home-button" id="signOutAll">Sign out everywhere</button>`);
-    $('signOutHere').onclick = () => signOutFlow(false);
-    $('signOutAll').onclick = () => signOutFlow(true);
+    if (!account?.token) { showMenu(false); return signInPrompt(); }
+    if (!$('nameMenu').hidden) return showMenu(false);
+    $('nameMenuNote').textContent = `Signed in as ${displayName(account.name)}${unsent() ? ' · some progress is still on its way to the server' : ''}`;
+    showMenu(true);
+    $('openSettings').focus();
   }
+  showMenu(false);
+  $('openSettings').onclick = () => { showMenu(false); deps.settings(); };
+  $('signOutHere').onclick = () => signOutFlow(false);
+  $('signOutAll').onclick = () => signOutFlow(true);
+  // A tap anywhere else, or Escape, closes the menu.
+  document.addEventListener?.('click', e => {
+    if (!$('nameMenu').hidden && !$('nameMenu').contains(e.target) && !$('accountButton').contains(e.target)) showMenu(false);
+  });
+  document.addEventListener?.('keydown', e => { if (e.key === 'Escape' && !$('nameMenu').hidden) { showMenu(false); $('accountButton').focus(); } });
   // Signing out sends what it can, then removes the account's copy from this browser.
   async function signOutFlow(everywhere) {
+    showMenu(false);
     const account = currentAccount();
     if (!account) return;
     if (account.token) await deps.syncNow();
@@ -81,5 +96,5 @@ export function createAccountUI(deps) {
     deps.home();
   }
 
-  return { menu, signIn: signInPrompt };
+  return { menu, closeMenu: () => showMenu(false), signIn: signInPrompt };
 }

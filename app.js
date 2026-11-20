@@ -60,7 +60,7 @@ function finishPuzzle(art, moves, { level, from }) {
   const heading = art.id === 'love-garden-v1' ? 'Made with love.' : esc(art.title);
   const eyebrow = level === null ? 'EVERY JEWEL, BACK HOME' : `LEVEL ${level + 1} COMPLETE`;
   // However the dialog closes, a finished puzzle returns to where it was opened from.
-  show(`<p class="eyebrow">${eyebrow}</p><h2>${heading}</h2><p>You restored the picture in ${moves} moves.</p><img src="${thumbnail(art, 8)}" alt="Your completed artwork"><button class="primary" id="keep">${from === 'chat' ? 'Back to chat' : 'Back to start'}</button>`, () => leaveGame(from));
+  show(`<p class="eyebrow">${eyebrow}</p><h2>${heading}</h2><p>You restored the picture in ${moves} moves.</p><img src="${thumbnail(art, 8)}" alt="Your completed artwork"><button class="primary" id="keep">${from === 'chat' ? 'Back to chat' : from === 'freeplay' ? 'Back to Free play' : 'Back to start'}</button>`, () => leaveGame(from));
   $('keep').onclick = () => $('modal').close();
 }
 
@@ -88,8 +88,13 @@ function syncNow() {
 }
 document.addEventListener?.('visibilitychange', () => { if (document.visibilityState === 'hidden') syncNow(); else syncSoon(0); });
 
-// Four screens: the start screen (home), the board (game), the chat and settings. Reloading always starts at home.
-function showScreen(name) { for (const id of ['home', 'game', 'chat', 'settings']) $(id).hidden = id !== name; }
+// The screens: the start screen (home), the board (game), the chat, Free play, the gallery and
+// settings. Reloading always starts at home.
+const SCREENS = ['home', 'game', 'chat', 'freePlayScreen', 'galleryScreen', 'settings'];
+function showScreen(name) {
+  for (const id of SCREENS) $(id).hidden = id !== name;
+  if (name !== 'home') accountUI.closeMenu();
+}
 function goHome() {
   showScreen('home'); chat.close();
   const next = nextLevel();
@@ -100,7 +105,6 @@ function goHome() {
   }).join('');
   $('startGame').disabled = next < 0;
   $('startLevel').textContent = next < 0 ? 'All levels complete' : `Level ${next + 1} of ${builtIns.length}`;
-  $('bonusTip').hidden = !freePlay.bonusWaiting();
   renderAccount();
 }
 // The corner button says who is signed in; the Chat button shows unread messages.
@@ -109,7 +113,6 @@ function renderAccount() {
   $('accountButton').textContent = !account ? 'Sign in' : account.token ? displayName(account.name) : 'Sign in again';
   $('accountButton').classList.toggle('needs-sign-in', Boolean(account && !account.token));
   $('chatButton').hidden = !online() || !friendName();
-  $('settingsButton').hidden = !online();
   $('chatLabel').textContent = `Chat with ${displayName(friendName())}`;
   showUnread(chat.unread());
 }
@@ -118,18 +121,22 @@ function showUnread(count) {
   $('unreadBadge').textContent = count > 99 ? '99+' : String(count);
   document.title = count ? `(${count}) Pixel Game` : 'Pixel Game';
 }
-// A puzzle opened from the chat returns to the chat.
-function leaveGame(from) { if (from === 'chat' && online()) openChat(); else goHome(); }
+// A puzzle returns to where it was opened: the chat, or Free play (a gauntlet's to its tab).
+function leaveGame(from) {
+  if (from === 'chat' && online()) openChat();
+  else if (from === 'freeplay' || from === 'gauntlet') freePlay.open(from === 'gauntlet' ? 'gauntlet' : undefined);
+  else goHome();
+}
 // Levels are the built-in puzzles, in order; the next one is the first not yet finished.
 const nextLevel = () => builtIns.findIndex(puzzle => progress(puzzle) !== 1);
 $('startGame').onclick = () => { const next = nextLevel(); if (next >= 0) openPuzzle(builtIns[next], next); };
 
 
-// Free play and the gallery (freeplay.js, gallery.js).
+// Free play and the gallery, each on its own screen (freeplay.js, gallery.js).
 const freePlay = createFreePlay({
-  $, show, thumbnail, progress, bonus, all: customPuzzles,
+  $, showScreen, home: () => goHome(), thumbnail, progress, bonus, all: customPuzzles,
   remove: id => { removeCustom(id); syncSoon(0); },
-  play: puzzle => openPuzzle(puzzle),
+  play: puzzle => openPuzzle(puzzle, null, 'freeplay'),
   create: () => maker.start(),
   gauntlet: () => gauntlet.start(),
   inGauntlet: puzzle => gauntlet.isMember(puzzle),
@@ -137,12 +144,11 @@ const freePlay = createFreePlay({
 });
 $('freePlay').onclick = () => freePlay.open();
 $('createHome').onclick = () => maker.start();
-$('bonusTip').onclick = () => freePlay.open();
-const gallery = createGallery({ show, thumbnail, progress, levels: builtIns, library });
+const gallery = createGallery({ $, show, showScreen, home: () => goHome(), track, thumbnail, progress, levels: builtIns, library });
 $('gallery').onclick = () => gallery.open();
 
 // Signing in and out (account-ui.js).
-const accountUI = createAccountUI({ $, show, ask, track, syncNow, refresh: () => refreshAccountState(), chat: { reset: () => chat.reset(), stop: () => chat.stop() }, home: () => goHome(), shipped });
+const accountUI = createAccountUI({ $, show, ask, track, syncNow, refresh: () => refreshAccountState(), chat: { reset: () => chat.reset(), stop: () => chat.stop() }, home: () => goHome(), settings: () => settings.open(), shipped });
 const signInPrompt = options => accountUI.signIn(options);
 $('accountButton').onclick = () => accountUI.menu();
 
@@ -156,9 +162,8 @@ function openChat() {
 $('chatButton').onclick = openChat;
 $('chatBack').onclick = goHome;
 
-// Settings, on their own screen (settings.js).
+// Settings, on their own screen, from the name menu (settings.js).
 const settings = createSettings({ $, track, showScreen, home: () => goHome() });
-$('settingsButton').onclick = () => settings.open();
 // A puzzle tapped in the chat opens; one removed from Free play comes back first.
 function openFromChat(puzzle, maker) {
   let known = library().find(a => a.id === puzzle.id);
@@ -206,8 +211,8 @@ const keepMade = puzzle => { if (customPuzzles().some(a => a.id === puzzle.id)) 
 const maker = createMaker({
   $, show, esc, thumbnail, track,
   keep: keepMade,
-  play: puzzle => openPuzzle(puzzle, null, $('chat').hidden ? null : 'chat'),
-  freePlay: () => freePlay.open(),
+  play: puzzle => openPuzzle(puzzle, null, !$('chat').hidden ? 'chat' : freePlay.isOpen() ? 'freeplay' : null),
+  freePlay: () => { $('modal').close(); freePlay.open('yours'); },
   signIn: (note, then) => signInPrompt({ note, then }),
 });
 
@@ -221,7 +226,7 @@ const gauntlet = createGauntlet({
   keep: keepMade,
   play: puzzle => openPuzzle(puzzle, null, 'gauntlet'),
   signIn: (note, then) => signInPrompt({ note, then }),
-  home: goHome,
+  back: () => freePlay.open('gauntlet'),
 });
 
 // The old Add to Home Screen pop-up is gone; forget whether it was shown.
