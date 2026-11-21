@@ -199,8 +199,6 @@ const chat = createChat({
 });
 // The server stopped accepting this browser's sign-in: keep everything, and ask again.
 whenSignedOut(() => { chat.stop(); if (!$('chat').hidden) goHome(); else renderAccount(); });
-// On phones, keep the message box above the on-screen keyboard.
-window.visualViewport?.addEventListener('resize', () => document.documentElement?.style.setProperty('--viewport-height', `${window.visualViewport.height}px`));
 // Pinching zooms the board (pointer events above), never the page: Safari ignores
 // maximum-scale, so its own pinch gestures are turned down here.
 for (const type of ['gesturestart', 'gesturechange']) document.addEventListener?.(type, e => e.preventDefault(), { passive: false });

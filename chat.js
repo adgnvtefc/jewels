@@ -171,6 +171,7 @@ export function createChat(deps) {
   };
   $('chatText').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('chatForm').requestSubmit(); } };
   $('chatMessages').onscroll = () => { if ($('chatMessages').scrollTop < 60) loadOlder(); };
+  const glide = glideWithKeyboard($);
 
   return {
     // Signed in (or out): start over with this account's cached chat.
@@ -182,9 +183,58 @@ export function createChat(deps) {
       render(); $('chatMessages').scrollTop = $('chatMessages').scrollHeight;
       markRead(); schedule(true);
     },
-    close() { if (!opened) return; opened = false; schedule(); },
+    close() { glide.reset(); if (!opened) return; opened = false; schedule(); },
     refresh() { if (opened) render(false); },
     sendPuzzle(puzzleId) { return queue({ kind: 'puzzle', puzzle: puzzleId }); },
     unread: () => unreadCount,
   };
+}
+
+// The on-screen keyboard. On a phone it covers the bottom of the screen; left alone, Safari
+// scrolls the page late and in a jerk to show the message box. Instead, as the box is tapped,
+// the whole chat slides up by the keyboard's height, timed like the keyboard so the two rise
+// together (as in a native chat app), and Safari is kept from scrolling. The header goes off the
+// top while typing; the newest message stays just above the box. Closing the keyboard slides it
+// back. The keyboard's height is a guess the first time, then measured and remembered.
+const KEYBOARD_HEIGHT = 'little-jewel:keyboard-height';
+const GLIDE = 'transform 320ms cubic-bezier(0.38, 0.7, 0.125, 1) 60ms';  // the keyboard's own pace
+function glideWithKeyboard($) {
+  const view = globalThis.visualViewport, chat = $('chat'), box = $('chatText');
+  if (!view) return { reset() {} };
+  let keyboard = 0, target = 0, check = null;
+  try { keyboard = Number(localStorage.getItem(KEYBOARD_HEIGHT)) || 0; } catch {}
+  keyboard ||= Math.round(screen.height * 0.38);
+  // The chat's lift, less anything Safari scrolled anyway, so the two always add up to the
+  // keyboard's height and nothing jumps.
+  function place(animate = true) {
+    const lift = Math.max(0, target - scrollY - view.offsetTop);
+    chat.style.transition = animate ? GLIDE : 'none';
+    chat.style.transform = lift ? `translateY(${-lift}px)` : '';
+  }
+  function lift(px) {
+    target = px; place();
+    clearTimeout(check);
+    // No keyboard came up (a hardware keyboard, say): settle back down.
+    if (px) check = setTimeout(() => { if (innerHeight - view.height - view.offsetTop < 100) { target = 0; place(); } }, 900);
+  }
+  // A tap on the box: lift the chat and focus the box ourselves, so Safari doesn't scroll it
+  // into view. Only touch does this; a mouse or a tab key focuses as usual, with no lift.
+  box.addEventListener('touchend', e => {
+    if (document.activeElement === box || chat.hidden) return;
+    e.preventDefault();
+    lift(keyboard);
+    box.focus({ preventScroll: true });
+  }, { passive: false });
+  box.addEventListener('blur', () => lift(0));
+  // Once the keyboard is up its real height is known: match it, and remember it.
+  view.addEventListener('resize', () => {
+    const measured = Math.round(innerHeight - view.height - view.offsetTop);
+    if (document.activeElement !== box || !target || measured < 100 || measured > screen.height * 0.6) return;
+    clearTimeout(check);
+    if (measured !== keyboard) { keyboard = measured; try { localStorage.setItem(KEYBOARD_HEIGHT, String(measured)); } catch {} }
+    lift(measured);
+  });
+  addEventListener('scroll', () => { if (target) place(false); });
+  view.addEventListener('scroll', () => { if (target) place(false); });
+  return { reset() { clearTimeout(check); target = 0; chat.style.transition = 'none'; chat.style.transform = ''; } };
 }

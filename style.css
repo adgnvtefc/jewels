@@ -128,7 +128,7 @@ dialog .home-button { width: 100%; max-width: none; margin-top: 10px; }
 /* Chat */
 .chat, .settings, .screen {
   display: flex; flex-direction: column; max-width: 600px; margin: auto;
-  height: var(--viewport-height, 100dvh);
+  height: 100vh; height: 100dvh;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) max(8px, env(safe-area-inset-bottom)) env(safe-area-inset-left);
 }
 .chat[hidden], .settings[hidden], .screen[hidden] { display: none; }
