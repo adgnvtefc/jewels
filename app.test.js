@@ -139,6 +139,25 @@ test('minimal UI loads and transfers board → shelf → board without camera ju
   assert.equal(t.elements.home.hidden, false);
 });
 
+test('BIG FINISH shows only when the jewels left are all on the shelf and all one color, and puts them in', async () => {
+  const two = await mount({ saved: { board: [-1, -1, -1, -1], shelf: [0, 0, 1, 1, ...Array(20).fill(-1)], moves: 5 } });
+  two.elements.startGame.onclick();
+  assert.equal(two.elements.bigFinish.hidden, true, 'two colors on the shelf: no button');
+  const misplaced = await mount({ saved: { board: [1, 1, -1, 1], shelf: [0, 0, ...Array(22).fill(-1)], moves: 5 } });
+  misplaced.elements.startGame.onclick();
+  assert.equal(misplaced.elements.bigFinish.hidden, true, 'a misplaced jewel on the board: no button');
+  const t = await mount({ saved: { board: [-1, 1, -1, 1], shelf: [0, 0, ...Array(22).fill(-1)], moves: 5 } });
+  t.elements.startGame.onclick();
+  assert.equal(t.elements.bigFinish.hidden, false, 'one color left, all on the shelf');
+  const done = t.elements.bigFinish.onclick();
+  assert.equal(t.elements.bigFinish.hidden, false, 'it stays while the jewels fly');
+  await done;
+  assert.deepEqual(t.saved().board, [0, 1, 0, 1]);
+  assert.ok(t.saved().shelf.every(c => c === -1));
+  assert.equal(t.saved().moves, 6, 'each group placed counts as a move');
+  assert.equal(t.elements.modal.open, true, 'the finish pop-up opens');
+});
+
 test('pinch zooms in and out, never moves jewels, and a cancelled gesture leaves taps usable', async () => {
   const t = await mount();
   t.elements.startGame.onclick();

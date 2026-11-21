@@ -9,7 +9,7 @@ import { readSave, writeSave } from './library.js';
 export function createBoard(deps) {
   const { $ } = deps;
   let art, state, selection, total = 0, level = null, returnTo = null, label = null;
-  let busy = false, zoom = 1, ox = 0, oy = 0, size = 0;
+  let busy = false, finishing = false, zoom = 1, ox = 0, oy = 0, size = 0;
   let cursor = 0, keyboard = false;
   const pointers = new Map();
   let gesture = null, startPoint = null, moved = false;
@@ -49,6 +49,8 @@ export function createBoard(deps) {
       b.setAttribute('aria-pressed', String(selection?.kind === 'shelf' && selection.color === c));
     });
     $('addShelf').disabled = busy || state.shelf.length >= MAX_SHELF_SIZE;
+    $('bigFinish').hidden = !finishing && !onlyShelfLeft();
+    $('bigFinish').disabled = finishing;
     const percent = Math.floor(correctCount(art, state) / total * 100);
     $('progressFill').style.width = `${percent}%`;
     $('progressText').textContent = `${percent}%`;
@@ -226,7 +228,7 @@ export function createBoard(deps) {
     }
   }
   function tapBoard(i) {
-    if (busy || i < 0 || art.pixels[i] < 0) return;
+    if (busy || finishing || i < 0 || art.pixels[i] < 0) return;
     if (state.board[i] >= 0 && state.board[i] === art.pixels[i]) {
       message('This jewel is already home and cannot be moved.');
       return;
@@ -236,7 +238,7 @@ export function createBoard(deps) {
     else message('Select a jewel group before choosing an empty space.');
   }
   function tapShelf(i) {
-    if (busy) return;
+    if (busy || finishing) return;
     const action = shelfAction(state, selection, i);
     if (action === 'select') selectGroup('shelf', i);
     else if (action === 'store') move('shelf', i);
@@ -302,7 +304,7 @@ export function createBoard(deps) {
       landing.push([key, el, resolve]);
     });
   }
-  async function animate(transfers) {
+  async function animate(transfers, stagger = 13, maxDelay = 200) {
     await Promise.all(transfers.map(async (t, n) => {
       const a = screenPoint(t.from), b = screenPoint(t.to), el = document.createElement('span');
       el.className = 'flying-jewel'; el.style.cssText = `left:${a.x}px;top:${a.y}px;width:${a.size}px;height:${a.size}px;background:${art.colors[t.color]}`;
@@ -313,11 +315,65 @@ export function createBoard(deps) {
           { transform: 'translate(-50%,-50%) scale(1)', opacity: a.hidden ? 0 : 1 },
           { transform: `translate(calc(-50% + ${(b.x-a.x)*.5}px),calc(-50% + ${(b.y-a.y)*.5-(t.from.kind==='shelf'&&t.to.kind==='shelf'?0:35)}px)) scale(1.2)`, opacity: 1, offset: .5 },
           { transform: `translate(calc(-50% + ${b.x-a.x}px),calc(-50% + ${b.y-a.y}px)) scale(${b.size/a.size})`, opacity: b.hidden ? 0 : 1 }
-        ], { duration: 330, delay: shelfWait + Math.min(n * 13, 200), easing: 'ease-in-out', fill: 'both' }).finished;
+        ], { duration: 330, delay: shelfWait + Math.min(n * stagger, maxDelay), easing: 'ease-in-out', fill: 'both' }).finished;
         await land(`${t.to.kind}:${t.to.index}`, el);
       } catch { el.remove(); }
     }));
   }
+  // The end of a puzzle: every jewel not yet home is on the shelf, all of one color, with
+  // nothing misplaced on the board, so all that's left is putting them in. BIG FINISH does it in one sweep: the
+  // groups are placed as if tapped one by one (each counts as a move), and every jewel flies
+  // from its shelf slot to its spot in turn, top of the picture to bottom, in about two seconds.
+  // Each color ripples as its last jewel lands.
+  const SWEEP_MS = 2000;
+  function onlyShelfLeft() {
+    const colors = new Set(state.shelf.filter(c => c >= 0));
+    return colors.size === 1 && state.board.every((c, i) => c < 0 || c === art.pixels[i]);
+  }
+  async function bigFinish() {
+    if (busy || finishing || !onlyShelfLeft()) return;
+    finishing = true; busy = true; selection = null;
+    const finishedBefore = finishedColors();
+    // Place every group on a copy, keeping track of which slot on screen each shelf jewel is in
+    // (the shelf closes up after each placement, but the screen still shows the first layout).
+    let next = state, slots = state.shelf.map((_, i) => i), last = null;
+    const flights = [];
+    while (next.shelf.some(c => c >= 0)) {
+      const color = next.shelf.find(c => c >= 0);
+      const empty = art.pixels.flatMap((c, i) => c === color && next.board[i] === -1 ? [i] : []);
+      if (!empty.length) break;
+      const away = i => last === null ? i : Math.hypot(i % art.width - last % art.width, Math.floor(i / art.width) - Math.floor(last / art.width));
+      const target = empty.reduce((best, i) => away(i) < away(best) ? i : best);
+      const result = transfer(art, next, select(art, next, 'shelf', next.shelf.indexOf(color)), 'board', target);
+      if (result.error) break;
+      for (const t of result.transfers) flights.push({ ...t, from: { kind: 'shelf', index: slots[t.from.index] } });
+      const gone = new Set(result.transfers.map(t => t.from.index));
+      slots = slots.filter((_, i) => next.shelf[i] >= 0 && !gone.has(i));
+      next = result.state; last = target;
+    }
+    // Top of the picture to bottom.
+    flights.sort((a, b) => a.to.index - b.to.index);
+    const stagger = Math.max(8, Math.min(60, SWEEP_MS / flights.length));
+    const motion = reducedMotion ? [] : flights.slice(0, 240);
+    // Each color ripples when its last jewel lands.
+    flights.forEach((t, n) => { t.lands = n * stagger + 330; });
+    const ripplesAt = [...new Set(flights.map(t => t.color))].map(color => flights.findLast(t => t.color === color));
+    arrivals = new Set(motion.map(t => `board:${t.to.index}`));
+    state = next; save(); update();
+    message('Every jewel, back where it belongs.');
+    for (const t of ripplesAt) setTimeout(() => { if (!finishedBefore.has(t.color)) ripple(t.color, t.to.index); }, reducedMotion ? 0 : t.lands);
+    try { await animate(motion, stagger, SWEEP_MS); } finally {
+      arrivals.clear(); busy = false; update();
+      const flown = new Set(motion.map(t => t.to.index));
+      for (const t of flights) if (!flown.has(t.to.index)) sparkle(t.to.index);
+    }
+    await new Promise(resolve => setTimeout(resolve, reducedMotion ? 0 : 500));  // let the last ripple play
+    // The button stays until the finish pop-up covers the screen.
+    finishing = false;
+    if (correctCount(art, state) === total) deps.finished(art, state.moves, { level, from: returnTo });
+    else update();
+  }
+  $('bigFinish').onclick = bigFinish;
   // Colors with every jewel home.
   function finishedColors() {
     const left = new Set();
@@ -411,7 +467,7 @@ export function createBoard(deps) {
     $('puzzleName').textContent = `${where ? `${where} · ` : ''}${art.title}`;
     message(`${where ? `${where}: ` : ''}${art.title}. Tap a jewel group, then the shelf.`);
   }
-  $('menu').onclick = () => { if (!busy) deps.leave(returnTo); };
+  $('menu').onclick = () => { if (!busy && !finishing) deps.leave(returnTo); };
 
   return {
     open,

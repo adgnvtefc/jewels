@@ -72,6 +72,35 @@ canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .flying-jewel { position: fixed; pointer-events: none; z-index: 10; }
 .add-shelf { display: block; min-height: 44px; width: 100%; font-size: 12px; color: #3c614f; }
 .shelf-scroll-note { margin: -4px 0 8px; text-align: center; font-size: 10px; color: #748478; }
+/* BIG FINISH: once the jewels left are all on the shelf, all one color, it takes the place of
+   Add shelf space. A green slab shaped like the shelf above it (same corners and hard bottom
+   edge), with a sheen sweeping across it and four stars twinkling in turn. */
+.big-finish {
+  position: relative; overflow: hidden; display: block; width: 100%; min-height: 46px; margin: 8px 0 8px; border-radius: 10px;
+  background: #3f8a62; border: 1px solid #357553; color: #fff; font-size: 15px; font-weight: 800; letter-spacing: .14em;
+  text-shadow: 0 1px 0 #24573c; box-shadow: 0 2px 0 #2a6346;
+}
+.big-finish-label { position: relative; z-index: 1; }
+.big-finish::before {
+  content: ''; position: absolute; top: 0; bottom: 0; left: -40%; width: 30%;
+  background: linear-gradient(100deg, transparent, #ffffff66, transparent); transform: skewX(-20deg);
+  animation: big-finish-sheen 2.4s ease-in-out infinite;
+}
+.big-finish-star {
+  position: absolute; width: 10px; height: 10px; background: #fffbe0; opacity: 0;
+  clip-path: polygon(50% 0, 61% 39%, 100% 50%, 61% 61%, 50% 100%, 39% 61%, 0 50%, 39% 39%);
+  animation: big-finish-twinkle 1.6s ease-in-out infinite;
+}
+.big-finish-star:nth-of-type(2) { left: 14%; top: 9px; }
+.big-finish-star:nth-of-type(3) { left: 30%; bottom: 7px; width: 7px; height: 7px; animation-delay: .4s; }
+.big-finish-star:nth-of-type(4) { right: 28%; top: 7px; width: 8px; height: 8px; animation-delay: .8s; }
+.big-finish-star:nth-of-type(5) { right: 12%; bottom: 9px; animation-delay: 1.2s; }
+.big-finish:disabled { opacity: 1; }
+.big-finish:active { transform: translateY(2px); box-shadow: none; }
+.big-finish:not([hidden]) ~ #addShelf, .big-finish:not([hidden]) ~ .shelf-scroll-note { display: none; }
+@keyframes big-finish-sheen { 0%, 30% { left: -40%; } 80%, 100% { left: 120%; } }
+@keyframes big-finish-twinkle { 0%, 100% { opacity: 0; transform: scale(.3) rotate(0deg); } 45% { opacity: 1; transform: scale(1.15) rotate(45deg); } 70% { opacity: 0; transform: scale(.5) rotate(90deg); } }
+@media (prefers-reduced-motion: reduce) { .big-finish::before, .big-finish-star { animation: none; } }
 dialog { overscroll-behavior: contain; border: 1px solid #e3e6da; background: #f8f7f2; color: #294b45; width: min(370px,calc(100% - 36px)); border-radius: 24px; padding: 32px; box-shadow: 0 20px 70px #193a4430; }
 dialog::backdrop { background: #233e3b66; backdrop-filter: blur(5px); }
 .close { position: absolute; right: 10px; top: 10px; width: 44px; height: 44px; font-size: 24px; }
