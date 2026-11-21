@@ -151,7 +151,9 @@ test('BIG FINISH shows only when the jewels left are all on the shelf and all on
   assert.equal(t.elements.bigFinish.hidden, false, 'one color left, all on the shelf');
   const done = t.elements.bigFinish.onclick();
   assert.equal(t.elements.bigFinish.hidden, false, 'it stays while the jewels fly');
-  await done;
+  // The app's timers don't keep the test process alive (setTimeout is unref'd above), so hold it open.
+  const awake = setInterval(() => {}, 20);
+  try { await done; } finally { clearInterval(awake); }
   assert.deepEqual(t.saved().board, [0, 1, 0, 1]);
   assert.ok(t.saved().shelf.every(c => c === -1));
   assert.equal(t.saved().moves, 6, 'each group placed counts as a move');
