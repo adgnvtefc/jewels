@@ -1,19 +1,25 @@
 """Making puzzles: every puzzle the Mac makes comes from one pipeline of three steps, and each
 step can be swapped:
 
-  wording   what to paint: the player's idea as typed, the artist's rewrite of it, or a random
-            word soup the artist blends into one subject (agents/artist.md, through orchestra)
-  picture   Z-Image paints the subject with the style line (STYLE)
+  wording   what to paint: the player's idea as typed, the artist's rewrite of it, a random
+            word soup the artist blends into one subject (agents/artist.md, through orchestra),
+            or the photo artist's description of a player's photo (agents/photo-artist.md)
+  picture   Z-Image paints the subject with the style line (STYLE); or, from a photo, redraws
+            the photo itself as the description says (SCENE_STYLE, image to image)
   puzzle    the picture becomes puzzle art: convert.js, the game's own converter, run here in
-            Node (convert_worker.mjs) exactly as the browser used to run it; or painter v3
+            Node (convert_worker.mjs) exactly as the browser used to run it, cropped to the
+            subject or (from a photo) keeping the whole frame; or painter v3
 
 A pipeline names one choice per step (PIPELINES). Create puzzle asks for four candidates and
 the gauntlet for five puzzles; an experiment only decides which pipeline makes which candidate
 (create_plan). The server always hands back finished puzzle art, never pictures.
 
-Create puzzle can come with a photo: the artist looks at it (with the player's words, if any)
-and writes the subject; the rest is the same. The photo is only ever held in memory, for that
-one call, and is never stored or shown to anyone (orchestra's call record leaves images out).
+Words alone take the "current" pipeline. A photo (with words or not) takes the photo-guided
+ones: the photo artist describes the whole photo, as changed by any words, and Z-Image redraws
+the photo from that description, keeping its layout and colours; half the candidates keep a
+little less of the photo (follow the words more), half a little more. The photo is held in
+memory for the job only, written to a temporary file just while Z-Image reads it, and never
+stored or shown to anyone (orchestra's call record leaves images out).
 """
 
 import atexit
@@ -25,6 +31,7 @@ import random
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import traceback
@@ -36,6 +43,7 @@ import painting
 ROOT = Path(__file__).resolve().parent
 USE_AGENT = os.environ.get("USE_AGENT", "1") != "0"
 ARTIST = ROOT / "agents" / "artist.md"
+PHOTO_ARTIST = ROOT / "agents" / "photo-artist.md"
 ARTIST_MAX_TOKENS = 2048  # the reply is one short line; the rest is for the model's thinking
 PHOTO_SIDE = 768  # a photo's longer side as the artist sees it
 MAX_PHOTO_BYTES = 2 * 1024 * 1024
@@ -46,6 +54,13 @@ GAUNTLET_SIZE = 5
 STYLE = ("flat vector icon style, bold simple shapes, thick dark outlines, at most 8 flat colors, "
          "no gradients, no text, plain solid light background")
 WORDS = json.loads((ROOT / "words.json").read_text())
+# From a photo: a flat illustration of the whole frame, and a conversion that keeps the frame and
+# small details (convert.js's LIGHTER options). How much of the photo Z-Image keeps: tried from
+# 0.08 to 0.6 on real photos; above 0.15 the photo fights the player's words and gets muddy.
+SCENE_STYLE = ("flat vector illustration, bold simple shapes, flat colors, at most 10 colors, no gradients, "
+               "no text, the whole scene fills the square frame")
+SCENE_CONVERT = {"fit": False, "unblend": True, "clean": "soft", "thin": True, "keepFeatures": True}
+PHOTO_STRENGTHS = (0.08, 0.15)
 
 # The painter test (PAINTER_TEST=1): two of Create puzzle's four candidates come from the
 # "painter" pipeline, shown in a random order, and each job is kept in data/painter-test/.
@@ -59,19 +74,25 @@ PAINTER_TEST_DIR = ROOT / "data" / "painter-test"
 @dataclass(frozen=True)
 class Pipeline:
     name: str
-    wording: str  # "typed", "artist" or "soup"
-    puzzle: str   # "convert" or "painter"
+    wording: str  # "typed", "artist", "soup" or "photo"
+    puzzle: str   # "convert", "painter" or "scene" (convert.js keeping the whole frame)
+    strength: float | None = None  # from a photo: how much of it Z-Image keeps
 
 
 PIPELINES = {p.name: p for p in (
     Pipeline("current", wording="artist", puzzle="convert"),   # Create puzzle, as it has been
     Pipeline("painter", wording="typed", puzzle="painter"),    # the painter test's challenger
     Pipeline("soup", wording="soup", puzzle="convert"),        # the gauntlet
+    *(Pipeline(f"photo-{s}", wording="photo", puzzle="scene", strength=s) for s in PHOTO_STRENGTHS),  # from a photo
 )}
 
 
-def create_plan() -> list[str]:
-    """Which pipeline makes each of Create puzzle's candidates, in the order shown."""
+def create_plan(photo: bool = False) -> list[str]:
+    """Which pipeline makes each of Create puzzle's candidates, in the order shown. From a photo:
+    half at each strength, shuffled (the painter test is for words only)."""
+    if photo:
+        plan = [f"photo-{s}" for s in PHOTO_STRENGTHS for _ in range(CANDIDATES // len(PHOTO_STRENGTHS))]
+        return random.sample(plan, len(plan))
     if not PAINTER_TEST:
         return ["current"] * CANDIDATES
     plan = ["current"] * (CANDIDATES // 2) + ["painter"] * (CANDIDATES - CANDIDATES // 2)
@@ -84,9 +105,9 @@ def title_for(text: str, limit: int = 60) -> str:
 
 # ---- wording ----
 
-def read_artist() -> tuple[dict, str]:
-    """agents/artist.md: `key: value` settings between '---' lines, then the system prompt."""
-    _, settings, prompt = ARTIST.read_text().split("---\n", 2)
+def read_artist(path: Path = ARTIST) -> tuple[dict, str]:
+    """An agents/*.md file: `key: value` settings between '---' lines, then the system prompt."""
+    _, settings, prompt = path.read_text().split("---\n", 2)
     pairs = (line.split(":", 1) for line in settings.splitlines() if ":" in line)
     return {key.strip(): value.strip() for key, value in pairs}, prompt.strip()
 
@@ -116,40 +137,70 @@ def clean_photo(data) -> str | None:
     return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode()
 
 
+def photo_square(photo: str, side: int = 512):
+    """The centre square of a cleaned photo (a data: URL), at the picture size, for Z-Image."""
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(base64.b64decode(photo.split(",", 1)[1]))).convert("RGB")
+    s = min(image.size)
+    box = ((image.width - s) // 2, (image.height - s) // 2, (image.width + s) // 2, (image.height + s) // 2)
+    return image.crop(box).resize((side, side), Image.LANCZOS)
+
+
 def photo_title(subject: str) -> str:
-    """A puzzle made from a photo is titled from the artist's subject, cut short:
+    """A title from a description, cut short, when the photo artist gave none:
     "A round red apple with a green stem" becomes "A round red apple"."""
     short = re.split(r",| with | holding | wearing | in front of ", subject, maxsplit=1)[0].strip()
     return title_for(short or subject)
 
 
-def artist(idea: str, tag: str, account: str, photo: str | None = None) -> tuple[str, bool]:
-    """Ask the artist for one drawable subject, from the idea, a photo, or both; fall back to
-    the idea itself."""
+def ask_model(agent: Path, content, tag: str, account: str, photo: bool = False) -> str | None:
+    """One call to an agent file's model through orchestra; its answer, or None if it failed or
+    was cut off (whatever came back then isn't a finished answer)."""
     if not USE_AGENT:
-        return idea, False
+        return None
     try:
         from orchestra import chat as model_chat
 
-        settings, prompt = read_artist()
-        content = idea
-        if photo:
-            content = [{"type": "text", "text": f"Their photo, and their words: {idea}" if idea else "Their photo."},
-                       {"type": "image_url", "image_url": {"url": photo}}]
+        settings, prompt = read_artist(agent)
         reply = model_chat(app="jewels", model=settings["model"],
                            temperature=float(settings["temperature"]) if "temperature" in settings else None,
-                           max_tokens=ARTIST_MAX_TOKENS, metadata={"job": tag, "account": account, "photo": bool(photo)},
+                           max_tokens=ARTIST_MAX_TOKENS, metadata={"job": tag, "account": account, "photo": photo},
                            messages=[{"role": "system", "content": prompt}, {"role": "user", "content": content}])
-        if reply.finish_reason == "length":  # cut off: whatever came back isn't a finished subject
-            print(f"{tag}: the artist ran out of tokens; using the idea as written", flush=True)
-            return idea, False
-        answer = re.sub(r"<think>.*?</think>", "", reply.content or "", flags=re.S).strip()
-        line = next((l.strip(" \"'`*") for l in answer.splitlines() if l.strip()), "").rstrip(".")
-        if line:
-            return line[:160], True
+        if reply.finish_reason == "length":
+            print(f"{tag}: {agent.stem} ran out of tokens", flush=True)
+            return None
+        return re.sub(r"<think>.*?</think>", "", reply.content or "", flags=re.S).strip() or None
     except Exception:
         traceback.print_exc()
-    return idea, False
+        return None
+
+
+def artist(idea: str, tag: str, account: str) -> tuple[str, bool]:
+    """Ask the artist for one drawable subject; fall back to the idea itself."""
+    answer = ask_model(ARTIST, idea, tag, account)
+    line = next((l.strip(" \"'`*") for l in (answer or "").splitlines() if l.strip()), "").rstrip(".")
+    return (line[:160], True) if line else (idea, False)
+
+
+def photo_artist(idea: str, photo: str, tag: str, account: str) -> tuple[str, str] | None:
+    """(title, description) of a player's photo, as changed by their words; None if it failed."""
+    text = f"Their photo, and their words: {idea}" if idea else "Their photo."
+    answer = ask_model(PHOTO_ARTIST, [{"type": "text", "text": text}, {"type": "image_url", "image_url": {"url": photo}}],
+                       tag, account, photo=True)
+    if not answer:
+        return None
+    fields, rest = {}, []
+    for line in answer.splitlines():
+        key, colon, value = line.partition(":")
+        if colon and key.strip().lower() in ("title", "description"):
+            fields[key.strip().lower()] = value.strip(" \"'`*")
+        elif line.strip():
+            rest.append(line.strip())
+    description = (fields.get("description") or " ".join(rest)).strip(" \"'`*")[:400]
+    if not description:
+        return None
+    return title_for(fields.get("title") or photo_title(description)), description
 
 
 def soup(rng=random) -> list[str]:
@@ -168,17 +219,18 @@ def soup(rng=random) -> list[str]:
 def wording(pipeline: str, idea: str, account: str, tag: str, photo: str | None = None) -> dict:
     """{subject, agent, words?, title}: what to paint, and the puzzle's title."""
     how = PIPELINES[pipeline].wording
-    if photo and how == "typed":
-        how = "artist"  # a photo has no words to paint as typed: the artist describes it
+    if how == "photo":
+        # Z-Image needs the description: from the style line and the words alone, it loses the photo
+        seen = photo_artist(idea, photo, tag, account)
+        if not seen:
+            raise RuntimeError("Couldn’t make out the photo. Try again, or try another photo.")
+        title, description = seen
+        return {"subject": description, "agent": True, "title": title}
     if how == "typed":
         return {"subject": idea, "agent": False, "title": title_for(idea)}
     if how == "artist":
-        subject, agent = artist(idea, tag, account, photo)
-        if photo and not idea and not agent:
-            raise RuntimeError("Couldn’t make out the photo. Try again, or describe it in words.")
-        # with a photo, the title comes from what the artist saw: words that go with a photo
-        # ("with a birthday candle") make a poor title
-        return {"subject": subject, "agent": agent, "title": photo_title(subject) if photo else title_for(idea)}
+        subject, agent = artist(idea, tag, account)
+        return {"subject": subject, "agent": agent, "title": title_for(idea)}
     words = soup()
     subject, agent = artist(" ".join(words), tag, account)
     return {"subject": subject, "agent": agent, "words": words, "title": title_for(", ".join(words), 80)}
@@ -223,12 +275,12 @@ class Converter:
         self.process = subprocess.Popen([find_node(), str(ROOT / "convert_worker.mjs")], cwd=ROOT, text=True,
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=1)
 
-    def convert(self, png: bytes, title: str) -> dict:
+    def convert(self, png: bytes, title: str, options: dict | None = None) -> dict:
         """Puzzle art (no id) from a picture's PNG bytes, exactly as the browser made it."""
         from PIL import Image
 
         image = Image.open(io.BytesIO(png)).convert("RGBA")
-        request = {"width": image.width, "height": image.height, "options": {"title": title},
+        request = {"width": image.width, "height": image.height, "options": {"title": title, **(options or {})},
                    "rgba": base64.b64encode(image.tobytes()).decode()}
         with self.lock:
             for attempt in (1, 2):  # once more on a fresh process, if the old one died
@@ -269,7 +321,7 @@ def puzzle(pipeline: str, picture, title: str) -> tuple[str, dict]:
         except Exception:
             traceback.print_exc()
         variant = "painter-failed"
-    return variant, converter.convert(picture_png(picture), title)
+    return variant, converter.convert(picture_png(picture), title, SCENE_CONVERT if PIPELINES[pipeline].puzzle == "scene" else None)
 
 
 # ---- a whole candidate ----
@@ -281,14 +333,26 @@ class Generator:
     def __init__(self, model):
         self.model = model
 
-    def paint(self, subject: str) -> dict:
-        seed, prompt = random.randrange(2**31), f"{subject}, one subject centered, {STYLE}"
-        image = self.model.generate_image(seed=seed, prompt=prompt, num_inference_steps=8, width=512, height=512).image
+    def paint(self, subject: str, photo=None, strength: float | None = None) -> dict:
+        """Paint the subject; with a photo (PIL, 512 px square), redraw the photo as the subject says."""
+        seed = random.randrange(2**31)
+        if photo is None:
+            prompt = f"{subject}, one subject centered, {STYLE}"
+            image = self.model.generate_image(seed=seed, prompt=prompt, num_inference_steps=8, width=512, height=512).image
+        else:
+            prompt = f"{subject}, {SCENE_STYLE}"
+            with tempfile.TemporaryDirectory() as folder:  # Z-Image reads the photo from a file: gone right after
+                path = Path(folder) / "photo.png"
+                photo.save(path)
+                image = self.model.generate_image(seed=seed, prompt=prompt, num_inference_steps=8, width=512, height=512,
+                                                  image_path=str(path), image_strength=strength).image
         return {"picture": image, "prompt": prompt, "seed": seed}
 
-    def make(self, pipeline: str, words: dict) -> dict:
-        """One candidate: {variant, art, subject, prompt, seed, picture (PIL), words?}."""
-        painted = self.paint(words["subject"])
+    def make(self, pipeline: str, words: dict, photo=None) -> dict:
+        """One candidate: {variant, art, subject, prompt, seed, picture (PIL), words?}. A photo
+        pipeline needs the photo (photo_square)."""
+        strength = PIPELINES[pipeline].strength
+        painted = self.paint(words["subject"], photo if strength else None, strength)
         variant, art = puzzle(pipeline, painted["picture"], words["title"])
         return {"variant": variant, "art": art, "subject": words["subject"], **painted,
                 **({"words": words["words"]} if "words" in words else {})}

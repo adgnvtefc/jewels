@@ -540,13 +540,16 @@ class FakeModel:
     """Stands in for Z-Image: a red ball on white, and a note of every prompt."""
 
     def __init__(self, broken=False):
-        self.prompts, self.broken = [], broken
+        self.prompts, self.broken, self.starts = [], broken, []
 
-    def generate_image(self, seed, prompt, **_):
+    def generate_image(self, seed, prompt, image_path=None, image_strength=None, **_):
         from PIL import Image, ImageDraw
         if self.broken:
             raise RuntimeError("out of memory")
         self.prompts.append(prompt)
+        if image_path:  # from a photo: what it was, and how much of it to keep
+            with Image.open(image_path) as start:
+                self.starts.append((image_path, start.size, image_strength))
         picture = Image.new("RGB", (512, 512), (250, 250, 250))
         ImageDraw.Draw(picture).ellipse((140, 140, 372, 372), fill=(220, 40, 40), outline=(30, 30, 40), width=12)
         return type("Result", (), {"image": picture})()
@@ -612,22 +615,38 @@ class GeneratorTest(unittest.TestCase):
         self.assertTrue(all(sorted(p) == ["current", "current", "painter", "painter"] for p in plans))
         self.assertGreater(len(plans), 1, "not always the same order")
 
+    def test_from_a_photo_the_plan_is_photo_guided_half_at_each_strength(self):
+        for test in (False, True):  # the painter test is for words only
+            with mock.patch.object(generator, "PAINTER_TEST", test):
+                plans = {tuple(generator.create_plan(photo=True)) for _ in range(40)}
+            self.assertTrue(all(sorted(p) == ["photo-0.08", "photo-0.08", "photo-0.15", "photo-0.15"] for p in plans))
+            self.assertGreater(len(plans), 1, "shuffled")
+
     def test_wording_as_typed_through_the_artist_or_as_a_word_soup(self):
         self.assertEqual(generator.wording("painter", self.IDEA, "bob", "t"), {"subject": self.IDEA, "agent": False, "title": "A sleepy cat"})
         with mock.patch.object(generator, "artist", return_value=(self.SUBJECT, True)) as artist:
             self.assertEqual(generator.wording("current", self.IDEA, "bob", "t")["subject"], self.SUBJECT)
-            artist.assert_called_once_with(self.IDEA, "t", "bob", None)
+            artist.assert_called_once_with(self.IDEA, "t", "bob")
             words = generator.wording("soup", "", "bob", "t")
         self.assertTrue(3 <= len(words["words"]) <= 5)
         self.assertEqual(artist.call_args[0][0], " ".join(words["words"]), "the artist blends the soup")
         self.assertEqual(words["title"], generator.title_for(", ".join(words["words"]), 80))
 
-    def test_with_a_photo_the_title_comes_from_what_the_artist_saw(self):
-        subject = "a slice of yellow cake with red strawberries and a yellow candle"
-        with mock.patch.object(generator, "artist", return_value=(subject, True)):
-            self.assertEqual(generator.wording("current", "with a birthday candle", "bob", "t", "data:photo")["title"], "A slice of yellow cake")
-            self.assertEqual(generator.wording("current", "", "bob", "t", "data:photo")["title"], "A slice of yellow cake")
-            self.assertEqual(generator.wording("current", "a cake", "bob", "t")["title"], "A cake", "words alone still name it")
+    def test_a_photo_is_described_whole_with_a_short_title_from_the_photo_artist(self):
+        description = "A white curly dog in black glasses facing right, a green leafy wall behind, daylight"
+        with mock.patch.object(generator, "ask_model", return_value=f"Title: Curly dog in glasses\nDescription: {description}") as ask:
+            words = generator.wording("photo-0.08", "in the snow", "bob", "t", "data:photo")
+        self.assertEqual(words, {"subject": description, "agent": True, "title": "Curly dog in glasses"})
+        agent, content = ask.call_args.args[:2]
+        self.assertEqual(agent, generator.PHOTO_ARTIST)
+        self.assertEqual(content, [{"type": "text", "text": "Their photo, and their words: in the snow"},
+                                   {"type": "image_url", "image_url": {"url": "data:photo"}}], "the words go with the photo")
+        with mock.patch.object(generator, "ask_model", return_value="A round red apple with a green stem on a wooden table"):
+            self.assertEqual(generator.wording("photo-0.15", "", "bob", "t", "data:photo")["title"], "A round red apple", "no title line: cut short")
+        with mock.patch.object(generator, "ask_model", return_value=None), self.assertRaises(RuntimeError):
+            generator.wording("photo-0.15", "", "bob", "t", "data:photo")
+        with mock.patch.object(generator, "artist", return_value=("a red ball", True)):
+            self.assertEqual(generator.wording("current", "a ball", "bob", "t")["title"], "A ball", "words alone still name it")
 
     def test_a_soup_is_three_to_five_different_familiar_words(self):
         rng = random.Random(3)
@@ -731,21 +750,27 @@ class JobTest(Harness):
         self.assertTrue(all(valid(c["art"]) and c["art"]["title"] == "A red ball" for c in view["candidates"]))
         self.assertNotIn("images", view, "never pictures")
 
-    def test_a_photo_goes_to_the_artist_once_and_is_then_dropped(self):
+    def test_a_photo_job_redraws_the_photo_four_times_and_keeps_nothing(self):
         photo = generator.clean_photo(photo_url())
-        job_id = self.job(prompt="")
+        job_id = self.job(prompt="make it blue")
         server.jobs[job_id]["photo"] = photo
-        subject = "A round red apple with a green stem"
-        with mock.patch.object(generator, "PAINTER_TEST", True), mock.patch.object(generator, "artist", return_value=(subject, True)) as artist, \
-                mock.patch.object(generator, "save_test_job"), mock.patch.object(generator.painting, "painted_puzzle", return_value=None), \
-                contextlib.redirect_stderr(io.StringIO()):
+        seen = ("Blue ball on white", "A blue ball in the middle of a white square, daylight")
+        model = FakeModel()
+        with mock.patch.object(generator, "PAINTER_TEST", True), mock.patch.object(generator, "photo_artist", return_value=seen) as artist, \
+                mock.patch.object(generator, "save_test_job") as kept:
             job = server.jobs[job_id]
-            view = self.run_job(job_id)
-        self.assertNotIn("photo", job, "not kept after the artist")
-        self.assertTrue(artist.call_args_list and all(c.args[3] == photo for c in artist.call_args_list), "the painter pipeline reads the photo too")
-        self.assertEqual(view["subject"], subject)
-        self.assertTrue(all(c["art"]["title"] == "A round red apple" for c in view["candidates"]), "titled from the subject")
-        self.assertNotIn("photo", json.dumps(view))
+            view = self.run_job(job_id, model)
+        artist.assert_called_once_with("make it blue", photo, job_id, "bob")
+        self.assertEqual(sorted(c["variant"] for c in view["candidates"]), ["photo-0.08", "photo-0.08", "photo-0.15", "photo-0.15"])
+        self.assertEqual(sorted(s for _, _, s in model.starts), [0.08, 0.08, 0.15, 0.15], "each redraws the photo")
+        self.assertTrue(all(size == (512, 512) for _, size, _ in model.starts), "its centre square")
+        self.assertFalse(any(Path(path).exists() for path, _, _ in model.starts), "the photo's file is gone")
+        self.assertTrue(all(prompt == f"{seen[1]}, {generator.SCENE_STYLE}" for prompt in model.prompts))
+        self.assertTrue(all(valid(c["art"]) and c["art"]["title"] == "Blue ball on white" for c in view["candidates"]))
+        self.assertEqual(view["subject"], "Blue ball on white", "the status shows the title, not the description")
+        kept.assert_not_called()  # the painter test never keeps pictures made from a photo
+        self.assertNotIn("photo", job)
+        self.assertNotIn(photo.split(",", 1)[1][:200], json.dumps(view), "the photo never goes back")
 
     def test_a_photo_the_artist_cant_read_fails_the_job_and_is_still_dropped(self):
         job_id = self.job(prompt="")

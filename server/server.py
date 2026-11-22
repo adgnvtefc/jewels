@@ -130,29 +130,37 @@ def worker() -> None:
 
 
 def run_create(job_id: str, maker) -> None:
-    """Create puzzle: four candidates, from the pipelines create_plan picks (all "current", or
-    in the painter test two of each, shuffled). Each pipeline's wording is done once."""
+    """Create puzzle: four candidates, from the pipelines create_plan picks: from words, all
+    "current" (or in the painter test two of each, shuffled); from a photo, the photo-guided
+    ones. Each kind of wording is done once. The photo is dropped when the job ends."""
     started, job = time.time(), jobs[job_id]
-    plan = generator.create_plan()
-    update(job_id, status="writing")
-    try:  # the photo is only needed for the artist, and isn't kept a moment longer
-        wordings = {name: generator.wording(name, job["prompt"], job["account"], job_id, job.get("photo"))
-                    for name in dict.fromkeys(plan)}
+    photo = job.get("photo")
+    try:
+        plan = generator.create_plan(photo=bool(photo))
+        kind = lambda name: generator.PIPELINES[name].wording
+        update(job_id, status="writing")
+        wordings = {}
+        for name in plan:
+            if kind(name) not in wordings:
+                wordings[kind(name)] = generator.wording(name, job["prompt"], job["account"], job_id, photo)
+        square = generator.photo_square(photo) if photo else None
+        shown = wordings.get("artist") or wordings[kind(plan[0])]
+        # a photo's description stays out of the status and the log: its title says enough
+        label = shown["title"] if photo else shown["subject"]
+        update(job_id, status="painting", subject=label, agent=shown["agent"])
+        made = []
+        for n, name in enumerate(plan):
+            made.append(maker.make(name, wordings[kind(name)], square))
+            update(job_id, painted=n + 1)
     finally:
         job.pop("photo", None)
-    current = wordings.get("current") or next(iter(wordings.values()))
-    update(job_id, status="painting", subject=current["subject"], agent=current["agent"])
-    made = []
-    for n, name in enumerate(plan):
-        made.append(maker.make(name, wordings[name]))
-        update(job_id, painted=n + 1)
-    if generator.PAINTER_TEST:
+    if generator.PAINTER_TEST and not photo:  # pictures made from a photo are never kept
         try:
-            generator.save_test_job(job_id, job, current["subject"], made)
+            generator.save_test_job(job_id, job, shown["subject"], made)
         except OSError:
             traceback.print_exc()  # keeping a copy must never cost the player their puzzles
     update(job_id, status="done", seconds=round(time.time() - started, 1), candidates=[generator.shown(m) for m in made])
-    print(f"job {job_id} ({job['account']}): {current['subject']!r} in {time.time() - started:.1f}s "
+    print(f"job {job_id} ({job['account']}): {label!r} in {time.time() - started:.1f}s "
           f"({','.join(m['variant'] for m in made)})", flush=True)
 
 
