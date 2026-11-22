@@ -1,7 +1,8 @@
 // Making a new puzzle works the same from everywhere (the start screen, Free play, the
 // chat's 🧩): one pop-up asks for an idea, the Mac paints four versions, and the player
 // picks one. The picked one is then played now, saved to Free play, or thrown away to
-// try the same idea again. Closing the pop-up at that point keeps it in Free play.
+// try again: back to the first pop-up, with the words and photo as they were, until Create.
+// Closing the pop-up at that point keeps it in Free play.
 //
 // The idea can be words, a photo, or both (words that add to the photo, not fight it). A photo is
 // shrunk here, sent once with the request, and never saved or shared: the Mac's artist looks
@@ -107,7 +108,7 @@ export function createMaker(deps) {
     }
   }
 
-  // Four versions; Try again paints four more of the same idea (and photo).
+  // Four versions; Try again goes back to the first pop-up with the same words and photo.
   function pick(idea, choices, variants, photo) {
     const asked = `${photo ? `<img class="photo-asked" src="${photo}" alt="Your photo">` : ''}${idea ? `<p>${esc(idea)}</p>` : ''}`;
     show(`<p class="eyebrow">CREATE PUZZLE</p><h2>Pick one</h2>${asked}<div class="candidates" id="candidates"></div><button class="home-button" id="again">Try again</button>`, () => { run++; });
@@ -124,7 +125,7 @@ export function createMaker(deps) {
     $('again').onclick = () => again(idea, photo);
   }
   const thumbnail = (choice, n) => deps.thumbnail({ ...choice, id: `choice-${Date.now()}-${n}` }, 4);
-  function again(idea, photo) { ask(idea, photo); paint(idea, photo); }
+  function again(idea, photo) { ask(idea, photo); }
 
   // The picked version isn't saved until the player decides; closing the pop-up keeps it.
   function made(idea, puzzle, variant, photo) {

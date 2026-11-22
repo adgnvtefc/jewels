@@ -667,20 +667,33 @@ test('Create puzzle: Save to Free play keeps it there; closing the pop-up keeps 
   assert.equal(t.elements.freePlayScreen.hidden, false, 'and the screen stays where it was: Free play, where Save to Free play went');
 });
 
-test('Create puzzle: Try again throws the version away and paints the same idea again', async () => {
+test('Create puzzle: Try again throws the version away and goes back to the idea, painting only on Create', async () => {
   const jobs = { n: 0 }, t = await mount({ stored: signedIn, server: painter(jobs) });
   await tick();
   await createFromHome(t);
   t.elements.candidates.children[0].onclick();
   t.elements.againMade.onclick();
+  assert.match(t.elements.modalContent.markup, /<h2>Describe a picture<\/h2>/, 'back to the first pop-up');
   assert.match(t.elements.modalContent.markup, /id="prompt"[^>]*value="a red ball"/, 'the idea stays in the box');
+  await tick(50);
+  assert.equal(jobs.n, 1, 'nothing is painted until Create');
+  assert.equal(t.elements.createGo.disabled, undefined, 'Create is ready to tap');
+  t.elements.prompt.value = 'a red ball, bigger';
+  t.elements.createForm.onsubmit({ preventDefault() {} });
   for (let i = 0; i < 300 && jobs.n < 2; i++) await tick(10);
+  assert.equal(jobs.n, 2);
+  assert.equal(jobs.prompt, 'a red ball, bigger', 'with the words as changed');
+  delete t.elements.candidates;
+  for (let i = 0; i < 300 && !t.elements.candidates?.children.length; i++) await tick(10);
+  t.elements.again.onclick();
+  assert.match(t.elements.modalContent.markup, /id="prompt"[^>]*value="a red ball, bigger"/, 'Try again under the four versions goes back too');
+  await tick(50);
   assert.equal(jobs.n, 2);
   t.elements.modal.close(); t.elements.modal.onclose();
   assert.equal(made(t).length, 0, 'nothing was kept');
 });
 
-test('Create puzzle from a photo alone: the photo goes with the request, the Mac names it, and Try again sends it again', async () => {
+test('Create puzzle from a photo alone: the photo goes with the request, the Mac names it, and Try again keeps it chosen', async () => {
   const art = { title: 'A round red apple', width: 2, height: 2, colors: ['#123456', '#abcdef'], pixels: [0, 1, 1, 0] };
   const events = [], jobs = { n: 0 }, t = await mount({ stored: signedIn, server: painter(jobs, Array(4).fill({ variant: 'current', art })), catseye: (name, data) => events.push([name, data]) });
   await tick();
@@ -708,6 +721,10 @@ test('Create puzzle from a photo alone: the photo goes with the request, the Mac
   assert.match(t.elements.modalContent.markup, /<h2>A round red apple<\/h2>/, 'named by the Mac');
   t.elements.againMade.onclick();
   assert.equal(t.elements.photoChosen.hidden, false, 'the photo stays chosen');
+  await tick(50);
+  assert.equal(jobs.n, 1, 'nothing is painted until Create');
+  t.elements.prompt.value = '';
+  t.elements.createForm.onsubmit({ preventDefault() {} });
   for (let i = 0; i < 300 && jobs.n < 2; i++) await tick(10);
   assert.equal(jobs.n, 2);
   assert.match(jobs.photo, /^data:image\//, 'and is sent again');
