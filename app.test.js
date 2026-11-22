@@ -63,6 +63,7 @@ async function mount({ location = { search: '', hostname: 'example.test' }, hist
     document: { getElementById: id => elements[id] ?? null, createElement: element, body: element(), visibilityState: 'visible', addEventListener() {} },
     confirm, navigator, catseye,
     Image: class { naturalWidth = 64; naturalHeight = 64; decode() { return Promise.resolve(); } },
+    URL: { createObjectURL: () => 'blob:photo', revokeObjectURL() {} },
     fetch: async (url, options = {}) => url.includes('/api/') ? (() => {
       const path = url.slice(url.indexOf('/api/')), body = options.body ? JSON.parse(options.body) : undefined;
       calls.push({ method: options.method || 'GET', path, body });
@@ -487,7 +488,7 @@ test('no pop-up on opening, even on an iPhone, and the old Add to Home Screen no
 function painter(jobs = { n: 0 }, candidates) {
   const server = fakeServer();
   return (method, path, body) => {
-    if (path === '/api/jobs' && method === 'POST') { jobs.n++; jobs.prompt = body.prompt; return [202, { id: `j${jobs.n}` }]; }
+    if (path === '/api/jobs' && method === 'POST') { jobs.n++; jobs.prompt = body.prompt; jobs.photo = body.photo; return [202, { id: `j${jobs.n}` }]; }
     if (path.startsWith('/api/jobs/')) return [200, { status: 'done', subject: 'a red ball', seconds: 5, ...(candidates ? { candidates } : { images: ['data:a', 'data:b'] }) }];
     if (path === '/api/puzzles') return [201, { ok: true }];
     return server(method, path, body);
@@ -677,6 +678,52 @@ test('Create puzzle: Try again throws the version away and paints the same idea 
   assert.equal(jobs.n, 2);
   t.elements.modal.close(); t.elements.modal.onclose();
   assert.equal(made(t).length, 0, 'nothing was kept');
+});
+
+test('Create puzzle from a photo alone: the photo goes with the request, the Mac names it, and Try again sends it again', async () => {
+  const art = { title: 'A round red apple', width: 2, height: 2, colors: ['#123456', '#abcdef'], pixels: [0, 1, 1, 0] };
+  const events = [], jobs = { n: 0 }, t = await mount({ stored: signedIn, server: painter(jobs, Array(4).fill({ variant: 'current', art })), catseye: (name, data) => events.push([name, data]) });
+  await tick();
+  t.elements.createHome.onclick();
+  assert.match(t.elements.modalContent.markup, /📷 Upload photo/);
+  assert.match(t.elements.modalContent.markup, /Photos stay private\. If you use a photo, add no text, or text that complements it rather than contradicts it\./);
+  assert.equal(t.elements.photoChosen.hidden, true);
+  t.elements.prompt.value = '';
+  t.elements.createForm.onsubmit({ preventDefault() {} });
+  assert.equal(jobs.n, 0, 'nothing to send yet');
+  assert.equal(t.elements.createStatus.textContent, 'Describe a picture, or add a photo.');
+  t.elements.photoInput.files = [{ name: 'apple.heic' }];
+  await t.elements.photoInput.onchange();
+  assert.equal(t.elements.photoPick.hidden, true, 'the chosen photo shows instead of the button');
+  assert.equal(t.elements.photoChosen.hidden, false);
+  t.elements.prompt.value = '';
+  t.elements.createForm.onsubmit({ preventDefault() {} });
+  for (let i = 0; i < 300 && !t.elements.candidates?.children.length; i++) await tick(10);
+  assert.equal(jobs.prompt, '');
+  assert.match(jobs.photo, /^data:image\//, 'the photo goes with the request');
+  assert.match(t.elements.modalContent.markup, /class="photo-asked"/, 'the pick shows the photo it came from');
+  assert.equal(events.find(([name]) => name === 'llm_generate')[1].photo, true);
+  assert.ok(!JSON.stringify(events).includes(jobs.photo), 'the photo never goes to analytics');
+  t.elements.candidates.children[0].onclick();
+  assert.match(t.elements.modalContent.markup, /<h2>A round red apple<\/h2>/, 'named by the Mac');
+  t.elements.againMade.onclick();
+  assert.equal(t.elements.photoChosen.hidden, false, 'the photo stays chosen');
+  for (let i = 0; i < 300 && jobs.n < 2; i++) await tick(10);
+  assert.equal(jobs.n, 2);
+  assert.match(jobs.photo, /^data:image\//, 'and is sent again');
+  t.elements.modal.close(); t.elements.modal.onclose();
+});
+
+test('the chat\'s 🧩 picker has Create puzzle at the top', async () => {
+  const t = await mount({ stored: signedIn, server: painter() });
+  await tick();
+  await createFromHome(t);
+  t.elements.candidates.children[0].onclick();
+  t.elements.keepMade.onclick();
+  t.elements.chatButton.onclick();
+  t.elements.chatPuzzle.onclick();
+  const markup = t.elements.modalContent.markup;
+  assert.ok(markup.indexOf('id="pickCreate"') < markup.indexOf('id="pickList"'), 'above your puzzles');
 });
 
 test('painter test: ready-made painter art shows as is, and picks record the pipeline and the order shown', async () => {

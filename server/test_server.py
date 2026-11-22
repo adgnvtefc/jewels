@@ -556,6 +556,43 @@ def valid(art):
     return saves.valid_art({**art, "id": "custom-test1"}) is not None
 
 
+def photo_url(size=(900, 600), kind="JPEG", noise=False):
+    """A made-up photo, as the game sends it, with a location tag in its EXIF."""
+    import base64
+    from PIL import Image
+    image = Image.effect_noise(size, 80).convert("RGB") if noise else Image.new("RGB", size, "#c33")
+    out = io.BytesIO()
+    exif = Image.Exif()
+    exif[0x8825] = {2: (40.0, 41.0, 0.0)}  # GPS
+    image.save(out, kind, **({"exif": exif} if kind == "JPEG" else {}))
+    return f"data:image/{kind.lower()};base64," + base64.b64encode(out.getvalue()).decode()
+
+
+class PhotoTest(Harness):
+    """Create puzzle from a photo: checked and cleaned before it is queued."""
+
+    def test_a_photo_is_shrunk_and_stripped_of_everything_but_the_picture(self):
+        import base64
+        from PIL import Image
+        cleaned = generator.clean_photo(photo_url())
+        image = Image.open(io.BytesIO(base64.b64decode(cleaned.split(",", 1)[1])))
+        self.assertEqual((image.format, max(image.size)), ("JPEG", generator.PHOTO_SIDE))
+        self.assertNotIn(0x8825, image.getexif(), "no location")
+        self.assertIsNotNone(generator.clean_photo(photo_url((40, 30), "PNG")))
+        for bad in ("hello", "data:image/jpeg;base64,aGVsbG8=", "data:text/html;base64,PGI+", 7, ["x"]):
+            self.assertIsNone(generator.clean_photo(bad), bad)
+
+    def test_a_job_needs_words_or_a_photo_and_a_bad_photo_is_refused(self):
+        self.assertEqual(self.call("POST", "/api/jobs", {"prompt": " "}, token=self.bob)[0], 400)
+        status, body = self.call("POST", "/api/jobs", {"prompt": "", "photo": "data:image/jpeg;base64,aGVsbG8="}, token=self.bob)
+        self.assertEqual((status, body["error"]), (400, "That photo couldn't be read. Try another one."))
+        self.assertEqual(self.call("POST", "/api/jobs", {"photo": photo_url()}, token=self.bob)[0], 503,
+                         "a photo alone is enough (then: no picture model in the tests)")
+        noisy = photo_url(noise=True)
+        self.assertGreater(len(noisy), 100_000)
+        self.assertEqual(self.call("POST", "/api/jobs", {"photo": noisy}, token=self.bob)[0], 503, "a real-sized photo gets through")
+
+
 class GeneratorTest(unittest.TestCase):
     """generator.py: the pipelines and their steps."""
     IDEA, SUBJECT = "a sleepy cat", "a curled gray cat with closed eyes"
@@ -579,11 +616,18 @@ class GeneratorTest(unittest.TestCase):
         self.assertEqual(generator.wording("painter", self.IDEA, "bob", "t"), {"subject": self.IDEA, "agent": False, "title": "A sleepy cat"})
         with mock.patch.object(generator, "artist", return_value=(self.SUBJECT, True)) as artist:
             self.assertEqual(generator.wording("current", self.IDEA, "bob", "t")["subject"], self.SUBJECT)
-            artist.assert_called_once_with(self.IDEA, "t", "bob")
+            artist.assert_called_once_with(self.IDEA, "t", "bob", None)
             words = generator.wording("soup", "", "bob", "t")
         self.assertTrue(3 <= len(words["words"]) <= 5)
         self.assertEqual(artist.call_args[0][0], " ".join(words["words"]), "the artist blends the soup")
         self.assertEqual(words["title"], generator.title_for(", ".join(words["words"]), 80))
+
+    def test_with_a_photo_the_title_comes_from_what_the_artist_saw(self):
+        subject = "a slice of yellow cake with red strawberries and a yellow candle"
+        with mock.patch.object(generator, "artist", return_value=(subject, True)):
+            self.assertEqual(generator.wording("current", "with a birthday candle", "bob", "t", "data:photo")["title"], "A slice of yellow cake")
+            self.assertEqual(generator.wording("current", "", "bob", "t", "data:photo")["title"], "A slice of yellow cake")
+            self.assertEqual(generator.wording("current", "a cake", "bob", "t")["title"], "A cake", "words alone still name it")
 
     def test_a_soup_is_three_to_five_different_familiar_words(self):
         rng = random.Random(3)
@@ -686,6 +730,30 @@ class JobTest(Harness):
         self.assertEqual([c["variant"] for c in view["candidates"]], ["current"] * 4)
         self.assertTrue(all(valid(c["art"]) and c["art"]["title"] == "A red ball" for c in view["candidates"]))
         self.assertNotIn("images", view, "never pictures")
+
+    def test_a_photo_goes_to_the_artist_once_and_is_then_dropped(self):
+        photo = generator.clean_photo(photo_url())
+        job_id = self.job(prompt="")
+        server.jobs[job_id]["photo"] = photo
+        subject = "A round red apple with a green stem"
+        with mock.patch.object(generator, "PAINTER_TEST", True), mock.patch.object(generator, "artist", return_value=(subject, True)) as artist, \
+                mock.patch.object(generator, "save_test_job"), mock.patch.object(generator.painting, "painted_puzzle", return_value=None), \
+                contextlib.redirect_stderr(io.StringIO()):
+            job = server.jobs[job_id]
+            view = self.run_job(job_id)
+        self.assertNotIn("photo", job, "not kept after the artist")
+        self.assertTrue(artist.call_args_list and all(c.args[3] == photo for c in artist.call_args_list), "the painter pipeline reads the photo too")
+        self.assertEqual(view["subject"], subject)
+        self.assertTrue(all(c["art"]["title"] == "A round red apple" for c in view["candidates"]), "titled from the subject")
+        self.assertNotIn("photo", json.dumps(view))
+
+    def test_a_photo_the_artist_cant_read_fails_the_job_and_is_still_dropped(self):
+        job_id = self.job(prompt="")
+        server.jobs[job_id]["photo"] = generator.clean_photo(photo_url())
+        job = server.jobs[job_id]
+        with self.assertRaises(RuntimeError):
+            self.run_job(job_id)
+        self.assertNotIn("photo", job)
 
     def test_in_the_painter_test_two_of_each_are_shuffled_and_the_job_kept(self):
         art = {"title": "A red ball", "width": 32, "height": 32, "colors": ["#ffffff", "#000000"], "pixels": [0, 1] * 512}

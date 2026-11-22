@@ -184,7 +184,7 @@ async function sendPuzzle(puzzle, note = text => { $('chatStatus').textContent =
 }
 $('chatPuzzle').onclick = () => {
   const mine = customPuzzles().filter(a => !a.from && gauntlet.revealed(a));  // never a gauntlet puzzle still hidden
-  show(`<p class="eyebrow">SEND A PUZZLE</p><h2>Your puzzles</h2>${mine.length ? '<div class="puzzle-list" id="pickList"></div>' : '<p>Nothing here yet. Create one, then send it.</p>'}<button class="primary" id="pickCreate">✦ Create puzzle</button>`);
+  show(`<p class="eyebrow">SEND A PUZZLE</p><h2>Your puzzles</h2><button class="primary" id="pickCreate">✦ Create puzzle</button>${mine.length ? '<div class="puzzle-list" id="pickList"></div>' : '<p>Nothing here yet. Create one, then send it.</p>'}`);
   for (const puzzle of mine) $('pickList').append(freePlay.card(puzzle, () => { $('modal').close(); sendPuzzle(puzzle); }));
   // A puzzle made from here can go straight to the chat (Send to chat), or wait in this list.
   $('pickCreate').onclick = () => maker.start({ send: puzzle => sendPuzzle(puzzle) });

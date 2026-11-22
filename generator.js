@@ -5,14 +5,15 @@ import { request, ServerError } from './account.js';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // Asks the Mac for puzzles and resolves with the finished job; onStatus hears each step.
-//   requestPuzzles('create', idea)  → job.candidates: [{ variant, art }], four to choose from
+//   requestPuzzles('create', idea, onStatus, photo?) → job.candidates: [{ variant, art }], four to choose from;
+//                                    photo: a JPEG data: URL, sent with this request only
 //   requestPuzzles('gauntlet')       → job.puzzles: [{ words, subject, art }], five in a row
 // The Mac makes the puzzle art itself (server/generator.py); pictureToArt is only for
 // pictures from an older server.
-export async function requestPuzzles(kind, idea, onStatus) {
+export async function requestPuzzles(kind, idea, onStatus, photo = null) {
   const { id } = kind === 'gauntlet'
     ? await request('/api/gauntlet', { method: 'POST', body: {} })
-    : await request('/api/jobs', { method: 'POST', body: { prompt: idea } });
+    : await request('/api/jobs', { method: 'POST', body: { prompt: idea, ...(photo && { photo }) } });
   return follow(id, onStatus);
 }
 async function follow(id, onStatus) {

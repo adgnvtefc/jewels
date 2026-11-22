@@ -16,7 +16,7 @@ everything but signing in and the health check needs `Authorization: Bearer <tok
     POST   /api/messages/read {friend, up_to}            -> {unread}
     GET    /api/notifications                            -> {messages, puzzles, finished}: which kinds get texts
     PUT    /api/notifications {messages?, puzzles?, finished?}  -> all three (true or false)
-    POST   /api/jobs      {prompt}                       -> 202 {id}
+    POST   /api/jobs      {prompt, photo?}               -> 202 {id}
     POST   /api/gauntlet                                 -> 202 {id}: five word-soup puzzles (a ready one at once, if made ahead)
     GET    /api/jobs/<id>                                -> status, then candidates (create) or puzzles (gauntlet), as puzzle art
     GET    /api/health                                   -> {model: "ready" | "loading" | "error"}
@@ -69,6 +69,7 @@ USE_MODEL = os.environ.get("USE_MODEL", "1") != "0"  # 0: no picture model (for 
 MAX_WAITING = 5
 MAX_PROMPT = 200
 MAX_BODY = 16 * 1024
+MAX_JOB_BODY = 3 * 1024 * 1024  # a create job can carry a photo
 MAX_SAVES_BODY = 2 * 1024 * 1024
 KEEP_JOBS = 30
 # The gauntlet: five puzzles from random "word soups" of familiar, drawable words
@@ -134,7 +135,11 @@ def run_create(job_id: str, maker) -> None:
     started, job = time.time(), jobs[job_id]
     plan = generator.create_plan()
     update(job_id, status="writing")
-    wordings = {name: generator.wording(name, job["prompt"], job["account"], job_id) for name in dict.fromkeys(plan)}
+    try:  # the photo is only needed for the artist, and isn't kept a moment longer
+        wordings = {name: generator.wording(name, job["prompt"], job["account"], job_id, job.get("photo"))
+                    for name in dict.fromkeys(plan)}
+    finally:
+        job.pop("photo", None)
     current = wordings.get("current") or next(iter(wordings.values()))
     update(job_id, status="painting", subject=current["subject"], agent=current["agent"])
     made = []
@@ -314,7 +319,7 @@ class Handler(BaseHTTPRequestHandler):
         path, _ = self.route()
         if path not in ("/api/login", "/api/logout", "/api/jobs", "/api/gauntlet", "/api/puzzles", "/api/messages", "/api/messages/read"):
             return self.send(404, {"error": "Not found."})
-        data = self.body()
+        data = self.body(MAX_JOB_BODY if path == "/api/jobs" else MAX_BODY)
         if data is None:
             return self.send(400, {"error": "Bad request."})
         if path == "/api/login":
@@ -354,15 +359,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def start_job(self, data: dict, me: dict, kind: str = "create") -> None:
         prompt = " ".join(str(data.get("prompt", "")).split())[:MAX_PROMPT]
-        if not prompt:
-            return self.send(400, {"error": "Describe what you'd like to make."})
+        photo = None
+        if kind == "create" and data.get("photo") is not None:
+            if not (photo := generator.clean_photo(data["photo"])):
+                return self.send(400, {"error": "That photo couldn't be read. Try another one."})
+        if not prompt and not photo:
+            return self.send(400, {"error": "Describe what you'd like to make, or add a photo."})
         if model_state["status"] in ("error", "off"):
             return self.send(503, {"error": "The picture model isn't available."})
         with lock:
             if sum(j["status"] in ("queued", "writing", "painting") for j in jobs.values()) >= MAX_WAITING:
                 return self.send(429, {"error": "Busy right now. Try again in a minute."})
             job_id = uuid.uuid4().hex
-            jobs[job_id] = {"id": job_id, "kind": kind, "prompt": prompt, "account": me["name"], "status": "queued", "painted": 0, "created": time.time()}
+            jobs[job_id] = {"id": job_id, "kind": kind, "prompt": prompt, "account": me["name"], "status": "queued", "painted": 0, "created": time.time(),
+                            **({"photo": photo} if photo else {})}
             for old in sorted(jobs.values(), key=lambda j: j["created"])[:-KEEP_JOBS]:
                 if old["status"] in ("done", "error"):
                     del jobs[old["id"]]

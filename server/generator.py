@@ -10,6 +10,10 @@ step can be swapped:
 A pipeline names one choice per step (PIPELINES). Create puzzle asks for four candidates and
 the gauntlet for five puzzles; an experiment only decides which pipeline makes which candidate
 (create_plan). The server always hands back finished puzzle art, never pictures.
+
+Create puzzle can come with a photo: the artist looks at it (with the player's words, if any)
+and writes the subject; the rest is the same. The photo is only ever held in memory, for that
+one call, and is never stored or shown to anyone (orchestra's call record keeps the request).
 """
 
 import atexit
@@ -33,6 +37,8 @@ ROOT = Path(__file__).resolve().parent
 USE_AGENT = os.environ.get("USE_AGENT", "1") != "0"
 ARTIST = ROOT / "agents" / "artist.md"
 ARTIST_MAX_TOKENS = 2048  # the reply is one short line; the rest is for the model's thinking
+PHOTO_SIDE = 768  # a photo's longer side as the artist sees it
+MAX_PHOTO_BYTES = 2 * 1024 * 1024
 
 CANDIDATES = 4
 GAUNTLET_SIZE = 5
@@ -85,18 +91,55 @@ def read_artist() -> tuple[dict, str]:
     return {key.strip(): value.strip() for key, value in pairs}, prompt.strip()
 
 
-def artist(idea: str, tag: str, account: str) -> tuple[str, bool]:
-    """Ask the artist for one drawable subject; fall back to the idea itself."""
+def clean_photo(data) -> str | None:
+    """A player's photo as the artist will see it: a data: URL of a JPEG at most PHOTO_SIDE px
+    on a side, re-encoded here so nothing else in the file (its location, the camera) comes
+    along. None if it isn't a picture."""
+    from PIL import Image, ImageOps
+
+    match = re.fullmatch(r"data:image/(?:jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})", data) if isinstance(data, str) else None
+    if not match:
+        return None
+    try:
+        raw = base64.b64decode(match[1], validate=True)
+        if len(raw) > MAX_PHOTO_BYTES:
+            return None
+        image = Image.open(io.BytesIO(raw))
+        if image.width * image.height > 50_000_000:
+            return None
+        image = ImageOps.exif_transpose(image).convert("RGB")
+        image.thumbnail((PHOTO_SIDE, PHOTO_SIDE))
+        out = io.BytesIO()
+        image.save(out, "JPEG", quality=85)
+    except Exception:
+        return None
+    return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode()
+
+
+def photo_title(subject: str) -> str:
+    """A puzzle made from a photo is titled from the artist's subject, cut short:
+    "A round red apple with a green stem" becomes "A round red apple"."""
+    short = re.split(r",| with | holding | wearing | in front of ", subject, maxsplit=1)[0].strip()
+    return title_for(short or subject)
+
+
+def artist(idea: str, tag: str, account: str, photo: str | None = None) -> tuple[str, bool]:
+    """Ask the artist for one drawable subject, from the idea, a photo, or both; fall back to
+    the idea itself."""
     if not USE_AGENT:
         return idea, False
     try:
         from orchestra import chat as model_chat
 
         settings, prompt = read_artist()
+        content = idea
+        if photo:
+            content = [{"type": "text", "text": f"Their photo, and their words: {idea}" if idea else "Their photo."},
+                       {"type": "image_url", "image_url": {"url": photo}}]
         reply = model_chat(app="jewels", model=settings["model"],
                            temperature=float(settings["temperature"]) if "temperature" in settings else None,
-                           max_tokens=ARTIST_MAX_TOKENS, metadata={"job": tag, "account": account},
-                           messages=[{"role": "system", "content": prompt}, {"role": "user", "content": idea}])
+                           max_tokens=ARTIST_MAX_TOKENS, metadata={"job": tag, "account": account, "photo": bool(photo)},
+                           messages=[{"role": "system", "content": prompt}, {"role": "user", "content": content}])
         if reply.finish_reason == "length":  # cut off: whatever came back isn't a finished subject
             print(f"{tag}: the artist ran out of tokens; using the idea as written", flush=True)
             return idea, False
@@ -122,14 +165,20 @@ def soup(rng=random) -> list[str]:
     return words
 
 
-def wording(pipeline: str, idea: str, account: str, tag: str) -> dict:
+def wording(pipeline: str, idea: str, account: str, tag: str, photo: str | None = None) -> dict:
     """{subject, agent, words?, title}: what to paint, and the puzzle's title."""
     how = PIPELINES[pipeline].wording
+    if photo and how == "typed":
+        how = "artist"  # a photo has no words to paint as typed: the artist describes it
     if how == "typed":
         return {"subject": idea, "agent": False, "title": title_for(idea)}
     if how == "artist":
-        subject, agent = artist(idea, tag, account)
-        return {"subject": subject, "agent": agent, "title": title_for(idea)}
+        subject, agent = artist(idea, tag, account, photo)
+        if photo and not idea and not agent:
+            raise RuntimeError("Couldn’t make out the photo. Try again, or describe it in words.")
+        # with a photo, the title comes from what the artist saw: words that go with a photo
+        # ("with a birthday candle") make a poor title
+        return {"subject": subject, "agent": agent, "title": photo_title(subject) if photo else title_for(idea)}
     words = soup()
     subject, agent = artist(" ".join(words), tag, account)
     return {"subject": subject, "agent": agent, "words": words, "title": title_for(", ".join(words), 80)}
