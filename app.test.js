@@ -639,6 +639,8 @@ test('Create puzzle: the picked version is saved only on Play now, and opens', a
   assert.equal(jobs.prompt, 'a red ball');
   t.elements.candidates.children[0].onclick();
   assert.match(t.elements.modalContent.markup, /Play now.*Save to Free play.*Try again/);
+  assert.match(t.elements.modalContent.markup, /<h2>A red ball<\/h2>/, 'from words, the words are the title');
+  assert.doesNotMatch(t.elements.modalContent.markup, /madeTitle/, 'with no box to rename it');
   assert.doesNotMatch(t.elements.modalContent.markup, /Send to/, 'no sending from here');
   assert.equal(made(t).length, 0, 'not saved until a choice is made');
   t.elements.playMade.onclick(); t.elements.modal.onclose();
@@ -718,7 +720,7 @@ test('Create puzzle from a photo alone: the photo goes with the request, the Mac
   assert.equal(events.find(([name]) => name === 'llm_generate')[1].photo, true);
   assert.ok(!JSON.stringify(events).includes(jobs.photo), 'the photo never goes to analytics');
   t.elements.candidates.children[0].onclick();
-  assert.match(t.elements.modalContent.markup, /<h2>A round red apple<\/h2>/, 'named by the Mac');
+  assert.match(t.elements.modalContent.markup, /id="madeTitle"[^>]*value="A round red apple"/, 'named by the Mac, in a box to rename it');
   t.elements.againMade.onclick();
   assert.equal(t.elements.photoChosen.hidden, false, 'the photo stays chosen');
   await tick(50);
@@ -729,6 +731,35 @@ test('Create puzzle from a photo alone: the photo goes with the request, the Mac
   assert.equal(jobs.n, 2);
   assert.match(jobs.photo, /^data:image\//, 'and is sent again');
   t.elements.modal.close(); t.elements.modal.onclose();
+});
+
+test('a puzzle made from a photo can be renamed before it is kept; an emptied box keeps the Mac\'s title', async () => {
+  const art = { title: 'A round red apple', width: 2, height: 2, colors: ['#123456', '#abcdef'], pixels: [0, 1, 1, 0] };
+  const t = await mount({ stored: signedIn, server: painter({ n: 0 }, Array(4).fill({ variant: 'photo-0.08', art })) });
+  await tick();
+  const fromPhoto = async () => {
+    delete t.elements.candidates;
+    t.elements.createHome.onclick();
+    t.elements.photoInput.files = [{ name: 'apple.jpg' }];
+    await t.elements.photoInput.onchange();
+    t.elements.prompt.value = '';
+    t.elements.createForm.onsubmit({ preventDefault() {} });
+    for (let i = 0; i < 300 && !t.elements.candidates?.children.length; i++) await tick(10);
+    t.elements.candidates.children[0].onclick();
+  };
+  await fromPhoto();
+  t.elements.madeTitle.value = '  My apple  ';
+  t.elements.madeTitle.oninput();
+  t.elements.playMade.onclick(); t.elements.modal.onclose();
+  assert.equal(made(t)[0].title, 'My apple', 'saved under the new name');
+  assert.equal(t.elements.puzzleName.textContent, 'My apple', 'and played under it');
+  await fromPhoto();
+  t.elements.madeTitle.value = 'Mine';
+  t.elements.madeTitle.oninput();
+  t.elements.madeTitle.value = ' ';
+  t.elements.madeTitle.oninput();
+  t.elements.modal.close(); t.elements.modal.onclose();
+  assert.deepEqual(made(t).map(a => a.title), ['A round red apple', 'My apple'], 'closed with an empty box: the Mac\'s title (newest first)');
 });
 
 test('the chat\'s 🧩 picker has Create puzzle at the top', async () => {

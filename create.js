@@ -128,12 +128,21 @@ export function createMaker(deps) {
   function again(idea, photo) { ask(idea, photo); }
 
   // The picked version isn't saved until the player decides; closing the pop-up keeps it.
+  // Made from a photo, its title (the Mac's) is a box to rename it in; words are already its title.
   function made(idea, puzzle, variant, photo) {
     let decided = false;
     const keep = () => { decided = true; if (deps.keep(puzzle)) return true; $('madeNote').textContent = 'This browser could not save the puzzle.'; decided = false; return false; };
     const sendButton = send ? '<button class="primary" id="sendMade">Send to chat</button>' : '';
-    show(`<p class="eyebrow">YOUR NEW PUZZLE</p><h2>${esc(puzzle.title)}</h2><img src="${deps.thumbnail(puzzle, 8)}" alt="Your new puzzle">${sendButton}<button class="${send ? 'home-button' : 'primary'}" id="playMade">Play now</button><button class="home-button" id="keepMade">Save to Free play</button><button class="home-button" id="againMade">Try again</button><p id="madeNote" role="status"></p>`,
+    const heading = photo
+      ? `<label class="made-title"><span>Title</span><input id="madeTitle" maxlength="60" autocomplete="off" enterkeyhint="done" value="${esc(puzzle.title)}"></label>`
+      : `<h2>${esc(puzzle.title)}</h2>`;
+    show(`<p class="eyebrow">YOUR NEW PUZZLE</p>${heading}<img src="${deps.thumbnail(puzzle, 8)}" alt="Your new puzzle">${sendButton}<button class="${send ? 'home-button' : 'primary'}" id="playMade">Play now</button><button class="home-button" id="keepMade">Save to Free play</button><button class="home-button" id="againMade">Try again</button><p id="madeNote" role="status"></p>`,
       () => { if (!decided) deps.keep(puzzle); });
+    if (photo) {
+      const given = puzzle.title;  // an emptied box keeps the Mac's title
+      $('madeTitle').oninput = () => { puzzle.title = $('madeTitle').value.trim() || given; };
+      $('madeTitle').onkeydown = e => { if (e.key === 'Enter') $('madeTitle').blur(); };
+    }
     // Sending keeps it in Free play too, as every puzzle you send is one of yours.
     if (send) $('sendMade').onclick = () => { if (keep()) { deps.track('made_puzzle', { choice: 'send', variant }); $('modal').close(); send(puzzle); } };
     $('playMade').onclick = () => { if (keep()) { deps.track('made_puzzle', { choice: 'play', variant }); $('modal').close(); deps.play(puzzle); } };
