@@ -13,7 +13,7 @@ the gauntlet for five puzzles; an experiment only decides which pipeline makes w
 
 Create puzzle can come with a photo: the artist looks at it (with the player's words, if any)
 and writes the subject; the rest is the same. The photo is only ever held in memory, for that
-one call, and is never stored or shown to anyone (orchestra's call record keeps the request).
+one call, and is never stored or shown to anyone (orchestra's call record leaves images out).
 """
 
 import atexit
