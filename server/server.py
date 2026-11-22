@@ -19,7 +19,8 @@ everything but signing in and the health check needs `Authorization: Bearer <tok
     POST   /api/jobs      {prompt, photo?}               -> 202 {id}
     POST   /api/gauntlet                                 -> 202 {id}: five word-soup puzzles (a ready one at once, if made ahead)
     GET    /api/jobs/<id>                                -> status, then candidates (create) or puzzles (gauntlet), as puzzle art
-    GET    /api/health                                   -> {model: "ready" | "loading" | "error"}
+    GET    /health                                       -> 200 "ok" when puzzles can be made (the picture
+                                                            model is loaded), else 503 and why; for monitor-hub
 
 Texts about unread messages go out through textbot's notify service on this Mac
 (~/projects/textbot/notify.py), by account ID; textbot holds the phone numbers.
@@ -246,14 +247,16 @@ def locked_out() -> bool:
 class Handler(BaseHTTPRequestHandler):
     server_version = "LittleJewel/2"
 
-    def send(self, status: int, body: dict) -> None:
-        data = json.dumps(body).encode()
+    def send(self, status: int, body: dict | str) -> None:
+        """JSON, or plain text for a string (/health)."""
+        text = isinstance(body, str)
+        data = (body if text else json.dumps(body)).encode()
         self.send_response(status)
         origin = self.headers.get("Origin")
         if origin in ORIGINS:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "text/plain; charset=utf-8" if text else "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -297,8 +300,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path, query = self.route()
-        if path == "/api/health":
-            return self.send(200, {"model": model_state["status"], "agent": generator.USE_AGENT})
+        if path == "/health":  # monitor-hub: up only when puzzles can be made
+            ready = model_state["status"] == "ready"
+            return self.send(200 if ready else 503, "ok" if ready else f"picture model {model_state['status']}")
         match = re.fullmatch(r"/api/jobs/([0-9a-f]{32})", path)
         if path not in ("/api/me", "/api/saves", "/api/messages", "/api/notifications") and not match:
             return self.send(404, {"error": "Not found."})

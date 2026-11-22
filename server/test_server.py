@@ -270,6 +270,26 @@ class ServerTest(Harness):
         self.assertEqual(copy.one("SELECT count(*) FROM accounts")[0], self.db.one("SELECT count(*) FROM accounts")[0])
 
 
+class HealthTest(Harness):
+    """/health, for monitor-hub: up only when puzzles can be made."""
+
+    def health(self):
+        try:
+            with urllib.request.urlopen(self.base + "/health") as response:
+                return response.status, response.read().decode(), response.headers["Content-Type"]
+        except urllib.error.HTTPError as error:
+            return error.code, error.read().decode(), error.headers["Content-Type"]
+
+    def test_ok_only_with_the_picture_model_loaded_and_no_old_path(self):
+        for status, expected in (("ready", (200, "ok")), ("loading", (503, "picture model loading")),
+                                 ("error", (503, "picture model error")), ("off", (503, "picture model off"))):
+            with mock.patch.dict(server.model_state, status=status):
+                code, text, kind = self.health()
+            self.assertEqual((code, text), expected, status)
+            self.assertTrue(kind.startswith("text/plain"))
+        self.assertEqual(self.call("GET", "/api/health")[0], 404, "the old path is gone")
+
+
 class TextTest(Harness):
     """Texts. texts.text_player is swapped for a fake that records calls, and the clock is
     passed in, so nothing waits 10 minutes or talks to textbot."""
